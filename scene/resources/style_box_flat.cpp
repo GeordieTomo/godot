@@ -498,7 +498,10 @@ inline void adapt_values(int p_index_a, int p_index_b, real_t *adapted_values, c
 // (background) corner vertex, so adjacent sides meet without overlapping. At rounded corners
 // the strip wraps around the full adjacent corner arcs: the side drawn earlier stays opaque
 // underneath, while the side drawn later fades across the arc, so the corner is an exact mix
-// of the two textures with none of the underlying colors bleeding through.
+// of the two textures with none of the underlying colors bleeding through. When antialiasing
+// is enabled, the strip fades out over its own extra vertex rows at both edges, so textured
+// borders provide their antialiasing themselves (the flat ring skips its outer and inner
+// gradients for boxes with textured sides).
 inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_indices, Vector<Color> &r_colors, Vector<Point2> &r_uvs,
 		const Rect2 &p_style_rect, const real_t p_border[4], const real_t p_adapted_corner[4], Side p_side, int p_corner_detail,
 		real_t p_outer_inset, const Vector2 &p_skew, const Color &p_color, bool p_fade_at_start_corner, bool p_fade_at_end_corner) {
@@ -537,36 +540,99 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 		r_inner_center = corner_point(inner_rect, p_corner) + corner_sign(p_corner) * Vector2(r_inner_radius, r_inner_radius);
 	};
 
-	constexpr int MAX_SAMPLES = 96;
-	Point2 outer_samples[MAX_SAMPLES];
-	Point2 inner_samples[MAX_SAMPLES];
-	real_t alphas[MAX_SAMPLES];
-	int sample_count = 0;
+	constexpr int MAX_COLS = 96;
+	Point2 col_pts[MAX_COLS][4];
+	real_t col_alphas[MAX_COLS];
+	real_t col_vs[MAX_COLS][4];
+	int col_count = 0;
 
-	auto add_sample = [&](const Point2 &p_outer, const Point2 &p_inner, real_t p_alpha) {
-		if (sample_count >= MAX_SAMPLES) {
+	// Each column holds, in order: the outer antialiasing vertex (alpha 0 at the true
+	// silhouette), the solid outer vertex, the solid inner vertex, and the inner antialiasing
+	// vertex (alpha 0 over the background fill), all sharing one alpha. Without antialiasing,
+	// only the two solid vertices are emitted. Texture v coordinates are measured geometrically
+	// so the solid band always spans the full 0..1 range; the fade rows fall outside it.
+	const bool faded_edges = p_outer_inset > 0.0;
+	const int rows = faded_edges ? 4 : 2;
+
+	auto add_column = [&](const Point2 &p_outer_true, const Point2 &p_outer_solid, const Point2 &p_inner_solid, const Point2 &p_inner_fade, real_t p_alpha) {
+		if (col_count >= MAX_COLS) {
 			return;
 		}
-		outer_samples[sample_count] = p_outer;
-		inner_samples[sample_count] = p_inner;
-		alphas[sample_count] = p_alpha;
-		sample_count++;
+		if (faded_edges) {
+			col_pts[col_count][0] = p_outer_true;
+			col_pts[col_count][1] = p_outer_solid;
+			col_pts[col_count][2] = p_inner_solid;
+			col_pts[col_count][3] = p_inner_fade;
+			const real_t band = (p_inner_solid - p_outer_solid).length();
+			if (band > 0.0001) {
+				col_vs[col_count][0] = -(p_outer_solid - p_outer_true).length() / band;
+				col_vs[col_count][1] = 0.0;
+				col_vs[col_count][2] = 1.0;
+				col_vs[col_count][3] = 1.0 + (p_inner_fade - p_inner_solid).length() / band;
+			} else {
+				for (int r = 0; r < 4; r++) {
+					col_vs[col_count][r] = (real_t)r / 3.0;
+				}
+			}
+		} else {
+			col_pts[col_count][0] = p_outer_solid;
+			col_pts[col_count][1] = p_inner_solid;
+			col_vs[col_count][0] = 0.0;
+			col_vs[col_count][1] = 1.0;
+		}
+		col_alphas[col_count] = p_alpha;
+		col_count++;
 	};
 
 	const int arc_detail = p_corner_detail + 1;
 
-	auto add_arc = [&](int p_corner, real_t p_angle_from, real_t p_angle_to, real_t p_alpha_from, real_t p_alpha_to, bool p_skip_first) {
+	auto add_arc_columns = [&](int p_corner, real_t p_angle_from, real_t p_angle_to, real_t p_alpha_from, real_t p_alpha_to, bool p_skip_first) {
 		Point2 outer_center;
 		real_t outer_radius;
 		Point2 inner_center;
 		real_t inner_radius;
 		arc_data(p_corner, outer_center, outer_radius, inner_center, inner_radius);
+		const real_t outer_full_radius = p_adapted_corner[p_corner];
+		const real_t inner_fade_radius = MAX(inner_radius - p_outer_inset, 0);
 		for (int k = p_skip_first ? 1 : 0; k < arc_detail; k++) {
 			const real_t t = (real_t)k / (arc_detail - 1);
 			const real_t angle = Math::lerp(p_angle_from, p_angle_to, t);
 			const Vector2 dir = Vector2(Math::cos(angle), Math::sin(angle));
-			add_sample(outer_center + dir * outer_radius, inner_center + dir * inner_radius, Math::lerp(p_alpha_from, p_alpha_to, t));
+			add_column(outer_center + dir * outer_full_radius,
+					outer_center + dir * outer_radius,
+					inner_center + dir * inner_radius,
+					inner_center + dir * inner_fade_radius,
+					Math::lerp(p_alpha_from, p_alpha_to, t));
 		}
+	};
+
+	auto add_junction_column = [&](int p_corner, real_t p_angle, real_t p_alpha) {
+		Point2 outer_center;
+		real_t outer_radius;
+		Point2 inner_center;
+		real_t inner_radius;
+		arc_data(p_corner, outer_center, outer_radius, inner_center, inner_radius);
+		const real_t outer_full_radius = p_adapted_corner[p_corner];
+		const real_t inner_fade_radius = MAX(inner_radius - p_outer_inset, 0);
+		const Vector2 dir = Vector2(Math::cos(p_angle), Math::sin(p_angle));
+		add_column(outer_center + dir * outer_full_radius,
+				outer_center + dir * outer_radius,
+				inner_center + dir * inner_radius,
+				inner_center + dir * inner_fade_radius,
+				p_alpha);
+	};
+
+	auto add_miter_column = [&](int p_corner, real_t p_alpha) {
+		const Point2 outer = corner_point(p_style_rect, p_corner);
+		const Point2 inner = corner_point(inner_rect, p_corner);
+		Point2 outer_solid = outer;
+		Point2 inner_fade = inner;
+		if (faded_edges && outer != inner) {
+			const Vector2 diag_dir = (inner - outer).normalized();
+			outer_solid = outer + diag_dir * p_outer_inset;
+			inner_fade = inner + diag_dir * p_outer_inset;
+		}
+		add_column(outer, outer_solid, inner, inner_fade, p_alpha);
 	};
 
 	// Start corner: this side fades in across the full arc (unless it must stay opaque as the
@@ -574,9 +640,9 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 	{
 		const real_t base_angle = Math::PI + corner_start * (Math::PI / 2.0);
 		if (p_adapted_corner[corner_start] > 0) {
-			add_arc(corner_start, base_angle, base_angle + Math::PI / 2.0, p_fade_at_start_corner ? 0.0 : 1.0, 1.0, false);
+			add_arc_columns(corner_start, base_angle, base_angle + Math::PI / 2.0, p_fade_at_start_corner ? 0.0 : 1.0, 1.0, false);
 		} else {
-			add_sample(corner_point(p_style_rect, corner_start), corner_point(inner_rect, corner_start), 1.0);
+			add_miter_column(corner_start, 1.0);
 		}
 	}
 
@@ -586,30 +652,25 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 	{
 		const real_t base_angle = Math::PI + corner_end * (Math::PI / 2.0);
 		if (p_adapted_corner[corner_end] > 0) {
-			Point2 outer_center;
-			real_t outer_radius;
-			Point2 inner_center;
-			real_t inner_radius;
-			arc_data(corner_end, outer_center, outer_radius, inner_center, inner_radius);
-			const Vector2 dir = Vector2(Math::cos(base_angle), Math::sin(base_angle));
-			add_sample(outer_center + dir * outer_radius, inner_center + dir * inner_radius, 1.0);
-			add_arc(corner_end, base_angle, base_angle + Math::PI / 2.0, 1.0, p_fade_at_end_corner ? 0.0 : 1.0, true);
+			add_junction_column(corner_end, base_angle, 1.0);
+			add_arc_columns(corner_end, base_angle, base_angle + Math::PI / 2.0, 1.0, p_fade_at_end_corner ? 0.0 : 1.0, true);
 		} else {
-			add_sample(corner_point(p_style_rect, corner_end), corner_point(inner_rect, corner_end), 1.0);
+			add_miter_column(corner_end, 1.0);
 		}
 	}
 
-	if (sample_count < 2) {
+	if (col_count < 2) {
 		return;
 	}
 
-	// Emit the interleaved inner/outer vertex strip.
+	// Emit the strip: consecutive columns of `rows` vertices each. The edge rows (when
+	// antialiasing) fade the texture in and out over its own soft edges.
 	const int vert_base = r_verts.size();
 	const int color_base = r_colors.size();
 	const int uv_base = r_uvs.size();
-	r_verts.resize(vert_base + sample_count * 2);
-	r_colors.resize(color_base + sample_count * 2);
-	r_uvs.resize(uv_base + sample_count * 2);
+	r_verts.resize(vert_base + col_count * rows);
+	r_colors.resize(color_base + col_count * rows);
+	r_uvs.resize(uv_base + col_count * rows);
 	Point2 *verts_ptr = r_verts.ptrw();
 	Color *colors_ptr = r_colors.ptrw();
 	Point2 *uvs_ptr = r_uvs.ptrw();
@@ -617,36 +678,38 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 	const bool skewed = !p_skew.is_zero_approx();
 	const Point2 center = p_style_rect.get_center();
 
-	for (int j = 0; j < sample_count; j++) {
-		const real_t u = (real_t)j / (sample_count - 1);
-		Point2 outer_pt = outer_samples[j];
-		Point2 inner_pt = inner_samples[j];
-		if (skewed) {
-			outer_pt += Vector2(-p_skew.x * (outer_pt.y - center.y), -p_skew.y * (outer_pt.x - center.x));
-			inner_pt += Vector2(-p_skew.x * (inner_pt.y - center.y), -p_skew.y * (inner_pt.x - center.x));
+	for (int j = 0; j < col_count; j++) {
+		const real_t u = (real_t)j / (col_count - 1);
+		const Color col(p_color.r, p_color.g, p_color.b, p_color.a * col_alphas[j]);
+		for (int r = 0; r < rows; r++) {
+			Point2 pt = col_pts[j][r];
+			if (skewed) {
+				pt += Vector2(-p_skew.x * (pt.y - center.y), -p_skew.y * (pt.x - center.x));
+			}
+			// With antialiasing, only the two solid middle rows carry the column's alpha;
+			// both edge rows fade to nothing.
+			const bool solid_row = !faded_edges || (r == 1 || r == 2);
+			verts_ptr[vert_base + j * rows + r] = pt;
+			colors_ptr[color_base + j * rows + r] = solid_row ? col : Color(p_color.r, p_color.g, p_color.b, 0);
+			uvs_ptr[uv_base + j * rows + r] = Vector2(u, col_vs[j][r]);
 		}
-		const Color col(p_color.r, p_color.g, p_color.b, p_color.a * alphas[j]);
-		const int ofs = j * 2;
-		verts_ptr[vert_base + ofs] = inner_pt;
-		verts_ptr[vert_base + ofs + 1] = outer_pt;
-		colors_ptr[color_base + ofs] = col;
-		colors_ptr[color_base + ofs + 1] = col;
-		uvs_ptr[uv_base + ofs] = Vector2(u, 1);
-		uvs_ptr[uv_base + ofs + 1] = Vector2(u, 0);
 	}
 
 	const int index_base = r_indices.size();
-	r_indices.resize(index_base + (sample_count - 1) * 6);
+	r_indices.resize(index_base + (col_count - 1) * (rows - 1) * 6);
 	int *indices_ptr = r_indices.ptrw();
 	int ofs = 0;
-	for (int j = 0; j < sample_count - 1; j++) {
-		const int vb = vert_base + j * 2;
-		indices_ptr[index_base + ofs++] = vb;
-		indices_ptr[index_base + ofs++] = vb + 2;
-		indices_ptr[index_base + ofs++] = vb + 1;
-		indices_ptr[index_base + ofs++] = vb + 1;
-		indices_ptr[index_base + ofs++] = vb + 2;
-		indices_ptr[index_base + ofs++] = vb + 3;
+	for (int j = 0; j < col_count - 1; j++) {
+		for (int r = 0; r < rows - 1; r++) {
+			const int a = vert_base + j * rows + r;
+			const int b = a + rows;
+			indices_ptr[index_base + ofs++] = a;
+			indices_ptr[index_base + ofs++] = b;
+			indices_ptr[index_base + ofs++] = a + 1;
+			indices_ptr[index_base + ofs++] = a + 1;
+			indices_ptr[index_base + ofs++] = b;
+			indices_ptr[index_base + ofs++] = b + 1;
+		}
 	}
 }
 
@@ -735,9 +798,9 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> bi;
 	Vector<int> si;
 
-	// Per-side outer inset for the border texture strips. The ring's outer antialiasing
-	// gradient reaches full opacity half an AA unit inside the stylebox edge, so the strips
-	// only need to start there for their silhouette to match the ring exactly.
+	// Per-side outer fade width for the border texture strips: the texture fades out over
+	// this distance from the true silhouette, providing its own outer antialiasing. The flat
+	// ring's solid area starts exactly where the fade reaches full opacity.
 	real_t tex_outer_inset[4] = {};
 	bool tex_side_drawn[4] = {};
 	bool has_border_textures = false;
@@ -850,14 +913,21 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			// Create border ring, not antialiased yet
 			draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
 					outer_rect_aa_colored, ((blend_on) ? infill_rect : inner_rect_aa_colored), border_color_inner, border_color, corner_detail, skew);
-			if (!blend_on) {
-				// Add antialiasing on the ring inner border
+			if (!blend_on && !has_border_textures) {
+				// Add antialiasing on the ring inner border. Skipped when any side has a border
+				// texture: those sides' strips carry their own inner fade (see below), and
+				// stacking this gradient beneath them would bleed border color into the texture
+				// edges and shift their colors.
 				draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
 						inner_rect_aa_colored, inner_rect_aa_transparent, border_color_blend, border_color, corner_detail, skew);
 			}
-			// Add antialiasing on the ring outer border
-			draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
-					outer_rect_aa_transparent, outer_rect_aa_colored, border_color, border_color_alpha, corner_detail, skew);
+			if (!has_border_textures) {
+				// Add antialiasing on the ring outer border. Skipped when any side has a border
+				// texture: those sides' strips carry their own outer fade, and stacking it over
+				// this gradient would let the border color bleed through the softened edge.
+				draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_transparent, outer_rect_aa_colored, border_color, border_color_alpha, corner_detail, skew);
+			}
 		}
 	}
 
