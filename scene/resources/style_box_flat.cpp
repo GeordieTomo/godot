@@ -211,6 +211,33 @@ Point2 StyleBoxFlat::get_shadow_offset() const {
 	return shadow_offset;
 }
 
+void StyleBoxFlat::set_inset_shadow_color(const Color &p_color) {
+	inset_shadow_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxFlat::get_inset_shadow_color() const {
+	return inset_shadow_color;
+}
+
+void StyleBoxFlat::set_inset_shadow_size(const int &p_size) {
+	inset_shadow_size = p_size;
+	emit_changed();
+}
+
+int StyleBoxFlat::get_inset_shadow_size() const {
+	return inset_shadow_size;
+}
+
+void StyleBoxFlat::set_inset_shadow_offset(const Point2 &p_offset) {
+	inset_shadow_offset = p_offset;
+	emit_changed();
+}
+
+Point2 StyleBoxFlat::get_inset_shadow_offset() const {
+	return inset_shadow_offset;
+}
+
 void StyleBoxFlat::_set_texture(Ref<Texture2D> *p_destination, const Ref<Texture2D> &p_texture) {
 	DEV_ASSERT(p_destination);
 	Ref<Texture2D> &destination = *p_destination;
@@ -728,7 +755,8 @@ Rect2 StyleBoxFlat::get_draw_rect(const Rect2 &p_rect) const {
 void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	bool draw_border = (border_width[0] > 0) || (border_width[1] > 0) || (border_width[2] > 0) || (border_width[3] > 0);
 	bool draw_shadow = (shadow_size > 0);
-	if (!draw_border && !draw_center && !draw_shadow) {
+	bool draw_inset_shadow = (inset_shadow_size > 0);
+	if (!draw_border && !draw_center && !draw_shadow && !draw_inset_shadow) {
 		return;
 	}
 
@@ -797,6 +825,7 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> fi;
 	Vector<int> bi;
 	Vector<int> si;
+	Vector<int> isi;
 
 	// Per-side outer fade width for the border texture strips: the texture fades out over
 	// this distance from the true silhouette, providing its own outer antialiasing. The flat
@@ -815,6 +844,7 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> &fill_indices = share_indices ? indices : fi;
 	Vector<int> &border_indices = share_indices ? indices : bi;
 	Vector<int> &shadow_indices = share_indices ? indices : si;
+	Vector<int> &inset_indices = share_indices ? indices : isi;
 
 	// Create shadow.
 	if (draw_shadow) {
@@ -931,6 +961,42 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 	}
 
+	// Create inset shadow.
+	if (draw_inset_shadow) {
+		// Per-side total fade depth: the inset size, extended by the offset component that
+		// points along that side's inward direction. The shadow's outer edge always stays
+		// aligned with the background shape; only its reach changes per side.
+		const real_t hole_depth[4] = {
+			inset_shadow_offset.x,  // SIDE_LEFT
+			inset_shadow_offset.y,  // SIDE_TOP
+			-inset_shadow_offset.x, // SIDE_RIGHT
+			-inset_shadow_offset.y  // SIDE_BOTTOM
+		};
+
+		real_t fade_depth[4];
+		bool any_fade = false;
+		for (int i = 0; i < 4; i++) {
+			fade_depth[i] = MAX(inset_shadow_size + hole_depth[i], 0);
+			any_fade |= fade_depth[i] > 0;
+		}
+
+		if (any_fade) {
+			Color inset_color_transparent = Color(inset_shadow_color.r, inset_shadow_color.g, inset_shadow_color.b, 0);
+			Rect2 fade_outer = infill_rect;
+			Rect2 fade_inner = infill_rect.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP],
+					-fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
+
+			if (fade_inner.size.width > 0 && fade_inner.size.height > 0) {
+				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
+						fade_outer, fade_inner, inset_color_transparent, inset_shadow_color, corner_detail, skew);
+			} else {
+				// The fade never reaches zero inside the background area: cover it entirely.
+				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
+						infill_rect, infill_rect, inset_shadow_color, inset_shadow_color, corner_detail, skew, true);
+			}
+		}
+	}
+
 	// Compute UV coordinates.
 	Rect2 uv_rect = style_rect.grow(aa_on ? aa_size_scaled : 0);
 	uvs.resize(verts.size());
@@ -953,6 +1019,9 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 		if (draw_center) {
 			vs->canvas_item_add_triangle_array(p_canvas_item, fill_indices, verts, colors, uvs, {}, {}, bg_texture.is_valid() ? bg_texture->get_rid() : RID());
+		}
+		if (draw_inset_shadow) {
+			vs->canvas_item_add_triangle_array(p_canvas_item, inset_indices, verts, colors, uvs);
 		}
 	} else {
 		vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
@@ -1031,6 +1100,15 @@ void StyleBoxFlat::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_shadow_offset", "offset"), &StyleBoxFlat::set_shadow_offset);
 	ClassDB::bind_method(D_METHOD("get_shadow_offset"), &StyleBoxFlat::get_shadow_offset);
 
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_color", "color"), &StyleBoxFlat::set_inset_shadow_color);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_color"), &StyleBoxFlat::get_inset_shadow_color);
+
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_size", "size"), &StyleBoxFlat::set_inset_shadow_size);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_size"), &StyleBoxFlat::get_inset_shadow_size);
+
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_offset", "offset"), &StyleBoxFlat::set_inset_shadow_offset);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_offset"), &StyleBoxFlat::get_inset_shadow_offset);
+
 	ClassDB::bind_method(D_METHOD("set_anti_aliased", "anti_aliased"), &StyleBoxFlat::set_anti_aliased);
 	ClassDB::bind_method(D_METHOD("is_anti_aliased"), &StyleBoxFlat::is_anti_aliased);
 
@@ -1089,6 +1167,11 @@ void StyleBoxFlat::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "shadow_texture", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_shadow_texture", "get_shadow_texture");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shadow_size", PROPERTY_HINT_RANGE, "0,100,1,or_greater,suffix:px"), "set_shadow_size", "get_shadow_size");
 	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "shadow_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_shadow_offset", "get_shadow_offset");
+
+	ADD_GROUP("Inset Shadow", "inset_shadow_");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "inset_shadow_color"), "set_inset_shadow_color", "get_inset_shadow_color");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "inset_shadow_size", PROPERTY_HINT_RANGE, "0,100,1,or_greater,suffix:px"), "set_inset_shadow_size", "get_inset_shadow_size");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "inset_shadow_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_inset_shadow_offset", "get_inset_shadow_offset");
 
 	ADD_GROUP("Anti Aliasing", "anti_aliasing_");
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "anti_aliasing"), "set_anti_aliased", "is_anti_aliased");

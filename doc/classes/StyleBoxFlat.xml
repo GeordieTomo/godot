@@ -174,6 +174,15 @@
 			Expands the stylebox outside of the control rect on the top edge. Useful in combination with [member border_width_top] to draw a border outside the control rect.
 			[b]Note:[/b] Unlike [member StyleBox.content_margin_top], [member expand_margin_top] does [i]not[/i] affect the size of the clickable area for [Control]s. This can negatively impact usability if used wrong, as the user may try to click an area of the StyleBox that cannot actually receive clicks.
 		</member>
+		<member name="inset_shadow_color" type="Color" setter="set_inset_shadow_color" getter="get_inset_shadow_color" default="Color(0, 0, 0, 0.6)">
+			The color of the inset shadow. This has no effect if [member inset_shadow_size] is lower than 1.
+		</member>
+		<member name="inset_shadow_offset" type="Vector2" setter="set_inset_shadow_offset" getter="get_inset_shadow_offset" default="Vector2(0, 0)">
+			The inset shadow offset in pixels. Extends the shadow's fade deeper into the background on the sides the offset points toward, and shortens it on the opposite sides. The shadow's outer edge always remains aligned with the background shape.
+		</member>
+		<member name="inset_shadow_size" type="int" setter="set_inset_shadow_size" getter="get_inset_shadow_size" default="0">
+			The size of the inset shadow in pixels. The shadow fades from [member inset_shadow_color] at the background's edge to fully transparent at this distance, extended by [member inset_shadow_offset] on each side. Larger values make the shadow cover more of the background area.
+		</member>
 		<member name="shadow_color" type="Color" setter="set_shadow_color" getter="get_shadow_color" default="Color(0, 0, 0, 0.6)">
 			The color of the shadow. This has no effect if [member shadow_size] is lower than 1.
 		</member>
