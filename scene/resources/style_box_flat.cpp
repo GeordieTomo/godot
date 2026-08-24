@@ -240,12 +240,14 @@ Ref<Texture2D> StyleBoxFlat::get_bg_texture() const {
 	return bg_texture;
 }
 
-void StyleBoxFlat::set_border_texture(Ref<Texture2D> p_texture) {
-	_set_texture(&border_texture, p_texture);
+void StyleBoxFlat::set_border_texture(Side p_side, Ref<Texture2D> p_texture) {
+	ERR_FAIL_INDEX((int)p_side, 4);
+	_set_texture(&border_textures[p_side], p_texture);
 }
 
-Ref<Texture2D> StyleBoxFlat::get_border_texture() const {
-	return border_texture;
+Ref<Texture2D> StyleBoxFlat::get_border_texture(Side p_side) const {
+	ERR_FAIL_INDEX_V((int)p_side, 4, Ref<Texture2D>());
+	return border_textures[p_side];
 }
 
 void StyleBoxFlat::set_shadow_texture(Ref<Texture2D> p_texture) {
@@ -491,6 +493,163 @@ inline void adapt_values(int p_index_a, int p_index_b, real_t *adapted_values, c
 	adapted_values[p_index_b] = MIN(MIN(value_b * factor, p_max_b), adapted_values[p_index_b]);
 }
 
+// Generates the triangle strip for one side's border texture. At sharp corners the strip is
+// mitered: it is cut along the diagonal that joins the outer corner vertex to the inner
+// (background) corner vertex, so adjacent sides meet without overlapping. At rounded corners
+// the strip wraps around the full adjacent corner arcs: the side drawn earlier stays opaque
+// underneath, while the side drawn later fades across the arc, so the corner is an exact mix
+// of the two textures with none of the underlying colors bleeding through.
+inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_indices, Vector<Color> &r_colors, Vector<Point2> &r_uvs,
+		const Rect2 &p_style_rect, const real_t p_border[4], const real_t p_adapted_corner[4], Side p_side, int p_corner_detail,
+		real_t p_outer_inset, const Vector2 &p_skew, const Color &p_color, bool p_fade_at_start_corner, bool p_fade_at_end_corner) {
+	const int corner_start = (p_side + 3) % 4;
+	const int corner_end = (int)p_side % 4;
+
+	// The inner boundary follows the full border widths (the infill rect), so it lines up
+	// exactly with the inner edge of the flat border ring, corners included.
+	const Rect2 inner_rect = p_style_rect.grow_individual(-p_border[SIDE_LEFT], -p_border[SIDE_TOP],
+			-p_border[SIDE_RIGHT], -p_border[SIDE_BOTTOM]);
+
+	auto corner_point = [](const Rect2 &p_rect, int p_corner) -> Point2 {
+		switch (p_corner) {
+			case CORNER_TOP_LEFT: return p_rect.position;
+			case CORNER_TOP_RIGHT: return Point2(p_rect.position.x + p_rect.size.x, p_rect.position.y);
+			case CORNER_BOTTOM_RIGHT: return p_rect.position + p_rect.size;
+			default: return Point2(p_rect.position.x, p_rect.position.y + p_rect.size.y);
+		}
+	};
+
+	auto corner_sign = [](int p_corner) -> Vector2 {
+		switch (p_corner) {
+			case CORNER_TOP_LEFT: return Vector2(1, 1);
+			case CORNER_TOP_RIGHT: return Vector2(-1, 1);
+			case CORNER_BOTTOM_RIGHT: return Vector2(-1, -1);
+			default: return Vector2(1, -1);
+		}
+	};
+
+	// Arc centers and radii for a corner. Keeping the outer center tied to the full (un-inset)
+	// radius makes the eroded arc end exactly where the inset straight edge begins.
+	auto arc_data = [&](int p_corner, Point2 &r_outer_center, real_t &r_outer_radius, Point2 &r_inner_center, real_t &r_inner_radius) {
+		r_outer_radius = MAX(p_adapted_corner[p_corner] - p_outer_inset, 0);
+		r_inner_radius = MAX(p_adapted_corner[p_corner] - MIN(p_border[p_corner], p_border[(p_corner + 1) % 4]), 0);
+		r_outer_center = corner_point(p_style_rect, p_corner) + corner_sign(p_corner) * Vector2(p_adapted_corner[p_corner], p_adapted_corner[p_corner]);
+		r_inner_center = corner_point(inner_rect, p_corner) + corner_sign(p_corner) * Vector2(r_inner_radius, r_inner_radius);
+	};
+
+	constexpr int MAX_SAMPLES = 96;
+	Point2 outer_samples[MAX_SAMPLES];
+	Point2 inner_samples[MAX_SAMPLES];
+	real_t alphas[MAX_SAMPLES];
+	int sample_count = 0;
+
+	auto add_sample = [&](const Point2 &p_outer, const Point2 &p_inner, real_t p_alpha) {
+		if (sample_count >= MAX_SAMPLES) {
+			return;
+		}
+		outer_samples[sample_count] = p_outer;
+		inner_samples[sample_count] = p_inner;
+		alphas[sample_count] = p_alpha;
+		sample_count++;
+	};
+
+	const int arc_detail = p_corner_detail + 1;
+
+	auto add_arc = [&](int p_corner, real_t p_angle_from, real_t p_angle_to, real_t p_alpha_from, real_t p_alpha_to, bool p_skip_first) {
+		Point2 outer_center;
+		real_t outer_radius;
+		Point2 inner_center;
+		real_t inner_radius;
+		arc_data(p_corner, outer_center, outer_radius, inner_center, inner_radius);
+		for (int k = p_skip_first ? 1 : 0; k < arc_detail; k++) {
+			const real_t t = (real_t)k / (arc_detail - 1);
+			const real_t angle = Math::lerp(p_angle_from, p_angle_to, t);
+			const Vector2 dir = Vector2(Math::cos(angle), Math::sin(angle));
+			add_sample(outer_center + dir * outer_radius, inner_center + dir * inner_radius, Math::lerp(p_alpha_from, p_alpha_to, t));
+		}
+	};
+
+	// Start corner: this side fades in across the full arc (unless it must stay opaque as the
+	// base layer for a later-drawn textured neighbor), or takes a miter cut when sharp.
+	{
+		const real_t base_angle = Math::PI + corner_start * (Math::PI / 2.0);
+		if (p_adapted_corner[corner_start] > 0) {
+			add_arc(corner_start, base_angle, base_angle + Math::PI / 2.0, p_fade_at_start_corner ? 0.0 : 1.0, 1.0, false);
+		} else {
+			add_sample(corner_point(p_style_rect, corner_start), corner_point(inner_rect, corner_start), 1.0);
+		}
+	}
+
+	// Far end of the straight edge (the end corner's junction point), followed by the end
+	// corner's full arc fading out (or staying opaque when this side is the base layer for a
+	// later-drawn textured neighbor), or the miter point when sharp.
+	{
+		const real_t base_angle = Math::PI + corner_end * (Math::PI / 2.0);
+		if (p_adapted_corner[corner_end] > 0) {
+			Point2 outer_center;
+			real_t outer_radius;
+			Point2 inner_center;
+			real_t inner_radius;
+			arc_data(corner_end, outer_center, outer_radius, inner_center, inner_radius);
+			const Vector2 dir = Vector2(Math::cos(base_angle), Math::sin(base_angle));
+			add_sample(outer_center + dir * outer_radius, inner_center + dir * inner_radius, 1.0);
+			add_arc(corner_end, base_angle, base_angle + Math::PI / 2.0, 1.0, p_fade_at_end_corner ? 0.0 : 1.0, true);
+		} else {
+			add_sample(corner_point(p_style_rect, corner_end), corner_point(inner_rect, corner_end), 1.0);
+		}
+	}
+
+	if (sample_count < 2) {
+		return;
+	}
+
+	// Emit the interleaved inner/outer vertex strip.
+	const int vert_base = r_verts.size();
+	const int color_base = r_colors.size();
+	const int uv_base = r_uvs.size();
+	r_verts.resize(vert_base + sample_count * 2);
+	r_colors.resize(color_base + sample_count * 2);
+	r_uvs.resize(uv_base + sample_count * 2);
+	Point2 *verts_ptr = r_verts.ptrw();
+	Color *colors_ptr = r_colors.ptrw();
+	Point2 *uvs_ptr = r_uvs.ptrw();
+
+	const bool skewed = !p_skew.is_zero_approx();
+	const Point2 center = p_style_rect.get_center();
+
+	for (int j = 0; j < sample_count; j++) {
+		const real_t u = (real_t)j / (sample_count - 1);
+		Point2 outer_pt = outer_samples[j];
+		Point2 inner_pt = inner_samples[j];
+		if (skewed) {
+			outer_pt += Vector2(-p_skew.x * (outer_pt.y - center.y), -p_skew.y * (outer_pt.x - center.x));
+			inner_pt += Vector2(-p_skew.x * (inner_pt.y - center.y), -p_skew.y * (inner_pt.x - center.x));
+		}
+		const Color col(p_color.r, p_color.g, p_color.b, p_color.a * alphas[j]);
+		const int ofs = j * 2;
+		verts_ptr[vert_base + ofs] = inner_pt;
+		verts_ptr[vert_base + ofs + 1] = outer_pt;
+		colors_ptr[color_base + ofs] = col;
+		colors_ptr[color_base + ofs + 1] = col;
+		uvs_ptr[uv_base + ofs] = Vector2(u, 1);
+		uvs_ptr[uv_base + ofs + 1] = Vector2(u, 0);
+	}
+
+	const int index_base = r_indices.size();
+	r_indices.resize(index_base + (sample_count - 1) * 6);
+	int *indices_ptr = r_indices.ptrw();
+	int ofs = 0;
+	for (int j = 0; j < sample_count - 1; j++) {
+		const int vb = vert_base + j * 2;
+		indices_ptr[index_base + ofs++] = vb;
+		indices_ptr[index_base + ofs++] = vb + 2;
+		indices_ptr[index_base + ofs++] = vb + 1;
+		indices_ptr[index_base + ofs++] = vb + 1;
+		indices_ptr[index_base + ofs++] = vb + 2;
+		indices_ptr[index_base + ofs++] = vb + 3;
+	}
+}
+
 Rect2 StyleBoxFlat::get_draw_rect(const Rect2 &p_rect) const {
 	Rect2 draw_rect = p_rect.grow_individual(expand_margin[SIDE_LEFT], expand_margin[SIDE_TOP], expand_margin[SIDE_RIGHT], expand_margin[SIDE_BOTTOM]);
 
@@ -576,7 +735,20 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> bi;
 	Vector<int> si;
 
-	bool share_indices = bg_texture.is_null() && border_texture.is_null() && shadow_texture.is_null();
+	// Per-side outer inset for the border texture strips. The ring's outer antialiasing
+	// gradient reaches full opacity half an AA unit inside the stylebox edge, so the strips
+	// only need to start there for their silhouette to match the ring exactly.
+	real_t tex_outer_inset[4] = {};
+	bool tex_side_drawn[4] = {};
+	bool has_border_textures = false;
+	for (int i = 0; i < 4; i++) {
+		if (aa_on && border_width[i] > 0) {
+			tex_outer_inset[i] = aa_size_scaled * 0.5;
+		}
+		tex_side_drawn[i] = border_textures[i].is_valid() && adapted_border[i] > tex_outer_inset[i];
+		has_border_textures |= tex_side_drawn[i];
+	}
+	bool share_indices = bg_texture.is_null() && shadow_texture.is_null() && !has_border_textures;
 	Vector<int> &fill_indices = share_indices ? indices : fi;
 	Vector<int> &border_indices = share_indices ? indices : bi;
 	Vector<int> &shadow_indices = share_indices ? indices : si;
@@ -705,13 +877,47 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			vs->canvas_item_add_triangle_array(p_canvas_item, shadow_indices, verts, colors, uvs, {}, {}, shadow_texture.is_valid() ? shadow_texture->get_rid() : RID());
 		}
 		if (draw_border) {
-			vs->canvas_item_add_triangle_array(p_canvas_item, border_indices, verts, colors, uvs, {}, {}, border_texture.is_valid() ? border_texture->get_rid() : RID());
+			// The border ring itself is always drawn untextured; per-side border
+			// textures are drawn as separate strips above it further below.
+			vs->canvas_item_add_triangle_array(p_canvas_item, border_indices, verts, colors, uvs, {}, {}, RID());
 		}
 		if (draw_center) {
 			vs->canvas_item_add_triangle_array(p_canvas_item, fill_indices, verts, colors, uvs, {}, {}, bg_texture.is_valid() ? bg_texture->get_rid() : RID());
 		}
 	} else {
 		vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
+	}
+
+	// Draw the per-side border textures above the flat border ring. At sharp corners adjacent
+	// strips are mitered against each other's diagonal; at rounded corners both textures cover
+	// the full corner arc. The side drawn earlier stays opaque there, and the side drawn later
+	// fades across it, so the corner is an exact mix of both textures.
+	if (has_border_textures) {
+		for (int i = 0; i < 4; i++) {
+			const Ref<Texture2D> &tex = border_textures[i];
+			if (tex.is_null() || !tex_side_drawn[i]) {
+				continue;
+			}
+
+			// Corner ownership by draw order: if the neighboring side at a corner is textured
+			// and drawn after this one, this strip must remain fully opaque across that arc so
+			// the neighbor's fade composites into it directly, without background bleeding in.
+			const int prev_side = (i + 3) % 4;
+			const int next_side = (i + 1) % 4;
+			const bool fade_start = !(i == 0 && tex_side_drawn[prev_side]);
+			const bool fade_end = !(i < 3 && tex_side_drawn[next_side]);
+
+			Vector<Point2> tex_verts;
+			Vector<int> tex_indices;
+			Vector<Color> tex_colors;
+			Vector<Point2> tex_uvs;
+			draw_border_texture_strip(tex_verts, tex_indices, tex_colors, tex_uvs, style_rect, adapted_border, adapted_corner,
+					(Side)i, corner_detail, tex_outer_inset[i], skew, border_color, fade_start, fade_end);
+
+			if (!tex_indices.is_empty()) {
+				vs->canvas_item_add_triangle_array(p_canvas_item, tex_indices, tex_verts, tex_colors, tex_uvs, {}, {}, tex->get_rid());
+			}
+		}
 	}
 }
 
@@ -767,8 +973,8 @@ void StyleBoxFlat::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bg_texture", "bg_texture"), &StyleBoxFlat::set_bg_texture);
 	ClassDB::bind_method(D_METHOD("get_bg_texture"), &StyleBoxFlat::get_bg_texture);
 
-	ClassDB::bind_method(D_METHOD("set_border_texture", "border_texture"), &StyleBoxFlat::set_border_texture);
-	ClassDB::bind_method(D_METHOD("get_border_texture"), &StyleBoxFlat::get_border_texture);
+	ClassDB::bind_method(D_METHOD("set_border_texture", "margin", "border_texture"), &StyleBoxFlat::set_border_texture);
+	ClassDB::bind_method(D_METHOD("get_border_texture", "margin"), &StyleBoxFlat::get_border_texture);
 
 	ClassDB::bind_method(D_METHOD("set_shadow_texture", "shadow_texture"), &StyleBoxFlat::set_shadow_texture);
 	ClassDB::bind_method(D_METHOD("get_shadow_texture"), &StyleBoxFlat::get_shadow_texture);
@@ -787,7 +993,10 @@ void StyleBoxFlat::_bind_methods() {
 
 	ADD_GROUP("Border", "border_");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "border_color"), "set_border_color", "get_border_color");
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "border_texture", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_border_texture", "get_border_texture");
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_left", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_border_texture", "get_border_texture", SIDE_LEFT);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_top", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_border_texture", "get_border_texture", SIDE_TOP);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_right", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_border_texture", "get_border_texture", SIDE_RIGHT);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_bottom", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_border_texture", "get_border_texture", SIDE_BOTTOM);
 
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "border_blend"), "set_border_blend", "get_border_blend");
 

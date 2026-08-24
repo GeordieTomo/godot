@@ -114,8 +114,17 @@
 		<member name="border_color" type="Color" setter="set_border_color" getter="get_border_color" default="Color(0.8, 0.8, 0.8, 1)">
 			Sets the color of the border.
 		</member>
-		<member name="border_texture" type="Texture2D" setter="set_border_texture" getter="get_border_texture">
-			The border texture of the stylebox. It is modulated by [member border_color].
+		<member name="border_texture_bottom" type="Texture2D" setter="set_border_texture" getter="get_border_texture">
+			The bottom border's texture. It is stretched along the border and modulated by [member border_color]. Where corners are not rounded, adjacent border textures are cut cleanly along the diagonal that joins the outer corner vertex and the inner corner vertex. Rounded corners are covered by both adjacent border textures, which fade across the full corner arc and blend 50/50 at the arc midpoint. Has no effect if [member border_width_bottom] is [code]0[/code]. See also [method set_border_texture].
+		</member>
+		<member name="border_texture_left" type="Texture2D" setter="set_border_texture" getter="get_border_texture">
+			The left border's texture. It is stretched along the border and modulated by [member border_color]. Where corners are not rounded, adjacent border textures are cut cleanly along the diagonal that joins the outer corner vertex and the inner corner vertex. Rounded corners are covered by both adjacent border textures, which fade across the full corner arc and blend 50/50 at the arc midpoint. Has no effect if [member border_width_left] is [code]0[/code]. See also [method set_border_texture].
+		</member>
+		<member name="border_texture_right" type="Texture2D" setter="set_border_texture" getter="get_border_texture">
+			The right border's texture. It is stretched along the border and modulated by [member border_color]. Where corners are not rounded, adjacent border textures are cut cleanly along the diagonal that joins the outer corner vertex and the inner corner vertex. Rounded corners are covered by both adjacent border textures, which fade across the full corner arc and blend 50/50 at the arc midpoint. Has no effect if [member border_width_right] is [code]0[/code]. See also [method set_border_texture].
+		</member>
+		<member name="border_texture_top" type="Texture2D" setter="set_border_texture" getter="get_border_texture">
+			The top border's texture. It is stretched along the border and modulated by [member border_color]. Where corners are not rounded, adjacent border textures are cut cleanly along the diagonal that joins the outer corner vertex and the inner corner vertex. Rounded corners are covered by both adjacent border textures, which fade across the full corner arc and blend 50/50 at the arc midpoint. Has no effect if [member border_width_top] is [code]0[/code]. See also [method set_border_texture].
 		</member>
 		<member name="border_width_bottom" type="int" setter="set_border_width" getter="get_border_width" default="0">
 			Border width for the bottom border.

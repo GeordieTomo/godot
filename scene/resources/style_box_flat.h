@@ -56,7 +56,7 @@ class StyleBoxFlat : public StyleBox {
 	real_t aa_size = 1;
 
 	Ref<Texture2D> bg_texture;
-	Ref<Texture2D> border_texture;
+	Ref<Texture2D> border_textures[4];
 	Ref<Texture2D> shadow_texture;
 
 	void _set_texture(Ref<Texture2D> *p_destination, const Ref<Texture2D> &p_texture);
@@ -114,8 +114,8 @@ public:
 	void set_bg_texture(Ref<Texture2D> p_texture);
 	Ref<Texture2D> get_bg_texture() const;
 
-	void set_border_texture(Ref<Texture2D> p_texture);
-	Ref<Texture2D> get_border_texture() const;
+	void set_border_texture(Side p_side, Ref<Texture2D> p_texture);
+	Ref<Texture2D> get_border_texture(Side p_side) const;
 
 	void set_shadow_texture(Ref<Texture2D> p_texture);
 	Ref<Texture2D> get_shadow_texture() const;
