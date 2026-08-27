@@ -138,6 +138,7 @@
 #include "scene/resources/image_texture.h"
 #include "scene/resources/immediate_mesh.h"
 #include "scene/resources/label_settings.h"
+#include "scene/resources/design_token_library.h"
 #include "scene/resources/material.h"
 #include "scene/resources/mesh_data_tool.h"
 #include "scene/resources/mesh_texture.h"
@@ -1016,6 +1017,7 @@ void register_scene_types() {
 	GDREGISTER_CLASS(Curve);
 
 	GDREGISTER_CLASS(LabelSettings);
+	GDREGISTER_CLASS(DesignTokenLibrary);
 
 	GDREGISTER_CLASS(TextLine);
 	GDREGISTER_CLASS(TextParagraph);
