@@ -62,6 +62,15 @@ Color StyleBoxFlat::get_bg_color() const {
 	return bg_color;
 }
 
+void StyleBoxFlat::set_modulate(const Color &p_color) {
+	modulate = p_color;
+	emit_changed();
+}
+
+Color StyleBoxFlat::get_modulate() const {
+	return modulate;
+}
+
 void StyleBoxFlat::set_border_color(const Color &p_color) {
 	border_color = p_color;
 	emit_changed();
@@ -759,6 +768,10 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	Color bg_color_animated = get_animated_value(SNAME("bg_color"), bg_color);
 	Color border_color_animated = get_animated_value(SNAME("border/color"), border_color);
+	Color modulate_animated = get_animated_value(SNAME("modulate"), modulate);
+
+	bg_color_animated *= modulate_animated;
+	border_color_animated *= modulate_animated;
 
 	real_t expand_margin_animated[4] = {
 		get_animated_value(SNAME("expand/margin_left"), expand_margin[SIDE_LEFT]),
@@ -785,6 +798,8 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	real_t shadow_size_animated = get_animated_value(SNAME("shadow/size"), shadow_size);
 	Vector2 shadow_offset_animated = get_animated_value(SNAME("shadow/offset"), shadow_offset);
 	Color shadow_color_animated = get_animated_value(SNAME("shadow/color"), shadow_color);
+
+	shadow_color_animated *= modulate_animated;
 
 	bool draw_border = (border_width_animated[0] > 0) || (border_width_animated[1] > 0) || (border_width_animated[2] > 0) || (border_width_animated[3] > 0);
 	bool draw_shadow = (shadow_size_animated > 0);
@@ -1014,18 +1029,19 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 
 		if (any_fade) {
-			Color inset_color_transparent = Color(inset_shadow_color.r, inset_shadow_color.g, inset_shadow_color.b, 0);
+			Color inset_shadow_color_modulated = inset_shadow_color * modulate_animated;
+			Color inset_color_transparent = Color(inset_shadow_color_modulated.r, inset_shadow_color_modulated.g, inset_shadow_color_modulated.b, 0);
 			Rect2 fade_outer = infill_rect;
 			Rect2 fade_inner = infill_rect.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP],
 					-fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
 
 			if (fade_inner.size.width > 0 && fade_inner.size.height > 0) {
 				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
-						fade_outer, fade_inner, inset_color_transparent, inset_shadow_color, corner_detail, skew);
+						fade_outer, fade_inner, inset_color_transparent, inset_shadow_color_modulated, corner_detail, skew);
 			} else {
 				// The fade never reaches zero inside the background area: cover it entirely.
 				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
-						infill_rect, infill_rect, inset_shadow_color, inset_shadow_color, corner_detail, skew, true);
+						infill_rect, infill_rect, inset_shadow_color_modulated, inset_shadow_color_modulated, corner_detail, skew, true);
 			}
 		}
 	}
@@ -1099,6 +1115,9 @@ void StyleBoxFlat::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bg_color", "color"), &StyleBoxFlat::set_bg_color);
 	ClassDB::bind_method(D_METHOD("get_bg_color"), &StyleBoxFlat::get_bg_color);
 
+	ClassDB::bind_method(D_METHOD("set_modulate", "color"), &StyleBoxFlat::set_modulate);
+	ClassDB::bind_method(D_METHOD("get_modulate"), &StyleBoxFlat::get_modulate);
+
 	ClassDB::bind_method(D_METHOD("set_border_color", "color"), &StyleBoxFlat::set_border_color);
 	ClassDB::bind_method(D_METHOD("get_border_color"), &StyleBoxFlat::get_border_color);
 
@@ -1163,6 +1182,7 @@ void StyleBoxFlat::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_shadow_texture"), &StyleBoxFlat::get_shadow_texture);
 
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "bg_color"), "set_bg_color", "get_bg_color");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "modulate"), "set_modulate", "get_modulate");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "bg_texture", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_bg_texture", "get_bg_texture");
 
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "draw_center"), "set_draw_center", "is_draw_center_enabled");

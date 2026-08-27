@@ -38,6 +38,7 @@ class StyleBoxFlat : public StyleBox {
 	GDCLASS(StyleBoxFlat, StyleBox);
 
 	Color bg_color = Color(0.6, 0.6, 0.6);
+	Color modulate = Color(1, 1, 1, 1);
 	Color shadow_color = Color(0, 0, 0, 0.6);
 	Color border_color = Color(0.8, 0.8, 0.8);
 
@@ -73,6 +74,9 @@ protected:
 public:
 	void set_bg_color(const Color &p_color);
 	Color get_bg_color() const;
+
+	void set_modulate(const Color &p_color);
+	Color get_modulate() const;
 
 	void set_border_color(const Color &p_color);
 	Color get_border_color() const;

@@ -59,6 +59,9 @@ void LabelSettings::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_outline_color", "color"), &LabelSettings::set_outline_color);
 	ClassDB::bind_method(D_METHOD("get_outline_color"), &LabelSettings::get_outline_color);
 
+	ClassDB::bind_method(D_METHOD("set_outline_offset", "offset"), &LabelSettings::set_outline_offset);
+	ClassDB::bind_method(D_METHOD("get_outline_offset"), &LabelSettings::get_outline_offset);
+
 	ClassDB::bind_method(D_METHOD("set_shadow_size", "size"), &LabelSettings::set_shadow_size);
 	ClassDB::bind_method(D_METHOD("get_shadow_size"), &LabelSettings::get_shadow_size);
 
@@ -103,6 +106,7 @@ void LabelSettings::_bind_methods() {
 	ADD_GROUP("Outline", "outline_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "outline_size", PROPERTY_HINT_RANGE, "0,127,1,or_greater,suffix:px"), "set_outline_size", "get_outline_size");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "outline_color"), "set_outline_color", "get_outline_color");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "outline_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_outline_offset", "get_outline_offset");
 
 	ADD_GROUP("Shadow", "shadow_");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "shadow_size", PROPERTY_HINT_RANGE, "0,127,1,or_greater,suffix:px"), "set_shadow_size", "get_shadow_size");
@@ -212,6 +216,17 @@ void LabelSettings::set_outline_color(const Color &p_color) {
 
 Color LabelSettings::get_outline_color() const {
 	return outline_color;
+}
+
+void LabelSettings::set_outline_offset(const Vector2 &p_offset) {
+	if (outline_offset != p_offset) {
+		outline_offset = p_offset;
+		emit_changed();
+	}
+}
+
+Vector2 LabelSettings::get_outline_offset() const {
+	return outline_offset;
 }
 
 void LabelSettings::set_shadow_size(int p_size) {
