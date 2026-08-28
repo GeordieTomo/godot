@@ -32,6 +32,7 @@
 
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
+#include "core/variant/callable.h"
 #include "editor/inspector/editor_inspector.h"
 #include "editor/plugins/editor_plugin.h"
 #include "scene/resources/design_token_library.h"
@@ -40,7 +41,6 @@ class Button;
 class HBoxContainer;
 class ItemList;
 class LineEdit;
-class PopupMenu;
 class PopupPanel;
 class DesignTokenInspectorPlugin;
 
@@ -94,7 +94,15 @@ class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
 
 	friend class DesignTokenPropertyEditor;
 
+	static DesignTokenInspectorPlugin *singleton;
+
 	Ref<DesignTokenLibrary> library;
+
+	// Callbacks registered by theme editors so their chain-button/read-only state
+	// updates right away when a theme item link is created or removed. The theme
+	// editor's own rebuild on the theme "changed" signal is focus-guarded and may
+	// be skipped, so these provide a deterministic refresh.
+	Vector<Callable> theme_refresh_callbacks;
 
 	PopupPanel *token_picker = nullptr;
 	LineEdit *search_line_edit = nullptr;
@@ -104,26 +112,20 @@ class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
 	Button *create_token_button = nullptr;
 	Button *open_in_library_button = nullptr;
 	Button *unlink_button = nullptr;
-	PopupMenu *linked_menu = nullptr;
 
-	Object *pending_editor = nullptr;
+	Object *pending_object = nullptr;
 	ObjectID pending_object_id;
 	String pending_property;
 	Variant::Type pending_type = Variant::NIL;
+	Control *picker_anchor = nullptr;
 
 	HashMap<ObjectID, HashSet<StringName>> linked_properties;
+	// Objects already scanned for links in their metadata; avoids re-walking
+	// every open scene on each token edit. New links always go through
+	// link_property()/register_link(), so a scanned object never needs a rescan.
+	HashSet<ObjectID> scanned_objects;
 
-	void _register_link(Object *p_object, const String &p_property);
-	void _unregister_link(Object *p_object, const String &p_property);
-	void _link_to(Object *p_object, const String &p_property, const String &p_token_name);
-	void _unlink_property(Object *p_object, const String &p_property);
 	void _refresh_inspector();
-
-	// Chain button interactions.
-	void _open_token_picker(DesignTokenPropertyEditor *p_editor);
-	void _open_linked_menu(DesignTokenPropertyEditor *p_editor);
-	void _on_linked_menu_id(int p_id);
-	void _navigate_to_library();
 
 	// Token picker popup.
 	void _ensure_picker();
@@ -133,9 +135,21 @@ class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
 	void _on_picker_create_token();
 	void _on_picker_open_in_library();
 	void _on_picker_unlink();
+	void _navigate_to_library();
 
 	void _on_library_changed();
 	void _on_token_renamed(const String &p_old_name, const String &p_new_name);
+
+	// Re-discovers links saved in object metadata after the editor was reopened,
+	// so token changes propagate to linked nodes/resources without having to
+	// select each one first.
+	void _scan_edited_scenes_links();
+	void _discover_object_links(Object *p_object);
+	void _discover_node_links(Node *p_node);
+
+	// Registers every link currently saved on a Theme resource (item links live
+	// in a single Dictionary metadata entry) so its values follow the tokens.
+	void _register_theme_links(const Theme *p_theme);
 
 protected:
 	static void _bind_methods();
@@ -147,9 +161,33 @@ public:
 			const String &p_hint_text, const BitField<PropertyUsageFlags> p_usage,
 			const bool p_wide = false) override;
 
+	// Opens the token picker popup for an arbitrary object/property, anchored to
+	// the control that triggered it (used by both the inspector chain button and
+	// the theme editor rows).
+	void open_picker(Object *p_object, const String &p_property, Variant::Type p_type, Control *p_anchor);
+	void link_property(Object *p_object, const String &p_property, const String &p_token_name);
+	void unlink_property(Object *p_object, const String &p_property);
+
+	// Theme editors register a refresh callback (see theme_refresh_callbacks) so
+	// their rows update deterministically when a theme link changes.
+	void register_theme_refresh_callback(const Callable &p_callback);
+	void unregister_theme_refresh_callback(const Callable &p_callback);
+	void notify_theme_links_changed(const Theme *p_theme);
+
+	// Registers a pre-existing link (found in the object's metadata) so value
+	// changes on the token library are propagated to it.
+	void register_link(Object *p_object, const String &p_property);
+	void unregister_link(Object *p_object, const String &p_property);
+
+	// Re-registers the links of a theme that's open in the theme editor dock so
+	// token changes always reach it, even when it isn't attached to a scene.
+	void register_theme_links(const Theme *p_theme);
+
 	void set_library(const Ref<DesignTokenLibrary> &p_library);
 	Ref<DesignTokenLibrary> get_library() const;
 	String get_linked_token(Object *p_object, const String &p_property) const;
+
+	static DesignTokenInspectorPlugin *get_singleton() { return singleton; }
 
 	DesignTokenInspectorPlugin();
 	~DesignTokenInspectorPlugin();

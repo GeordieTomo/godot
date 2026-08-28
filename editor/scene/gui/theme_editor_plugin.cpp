@@ -47,6 +47,7 @@
 #include "editor/gui/filter_line_edit.h"
 #include "editor/gui/progress_dialog.h"
 #include "editor/inspector/editor_resource_picker.h"
+#include "editor/plugins/design_token_inspector_plugin.h"
 #include "editor/settings/editor_command_palette.h"
 #include "editor/settings/editor_settings.h"
 #include "editor/themes/editor_scale.h"
@@ -2571,6 +2572,20 @@ HBoxContainer *ThemeTypeEditor::_create_property_control(Theme::DataType p_data_
 		item_name_container->add_child(item_rename_cancel_button);
 		item_rename_cancel_button->connect(SceneStringName(pressed), callable_mp(this, &ThemeTypeEditor::_item_rename_canceled).bind(p_data_type, p_item_name, item_name_container));
 		item_rename_cancel_button->hide();
+
+		// Link this value to a design token. Only colors, constants and font
+		// sizes are token-linkable (theme types that match token value types);
+		// icons, fonts and styleboxes are resources so they have no token link.
+		if (p_data_type == Theme::DATA_TYPE_COLOR || p_data_type == Theme::DATA_TYPE_CONSTANT || p_data_type == Theme::DATA_TYPE_FONT_SIZE) {
+			Button *item_link_button = memnew(Button);
+			item_link_button->set_button_icon(get_editor_theme_icon(SNAME("Linked")));
+			item_link_button->set_tooltip_text(TTRC("Link this value to a design token"));
+			item_link_button->set_flat(true);
+			item_link_button->set_custom_minimum_size(Size2(20, 20));
+			item_name_container->add_child(item_link_button);
+			item_link_button->connect(SceneStringName(pressed), callable_mp(this, &ThemeTypeEditor::_item_token_chain_pressed).bind(p_data_type, p_item_name, item_link_button));
+			item_control->set_meta("_token_chain", item_link_button);
+		}
 	} else {
 		item_name->add_theme_color_override(SceneStringName(font_color), get_theme_color(SNAME("font_disabled_color"), EditorStringName(Editor)));
 
@@ -2618,6 +2633,8 @@ void ThemeTypeEditor::_update_type_items() {
 				item_editor->set_disabled(true);
 			}
 
+			_update_item_token_state(item_control, Theme::DATA_TYPE_COLOR, E.key, item_editor);
+
 			_add_focusable(item_editor);
 			color_items_list->add_child(item_control);
 		}
@@ -2651,6 +2668,8 @@ void ThemeTypeEditor::_update_type_items() {
 				item_editor->set_value(ThemeDB::get_singleton()->get_default_theme()->get_constant(E.key, edited_type));
 				item_editor->set_read_only(true);
 			}
+
+			_update_item_token_state(item_control, Theme::DATA_TYPE_CONSTANT, E.key, item_editor);
 
 			_add_focusable(item_editor);
 			constant_items_list->add_child(item_control);
@@ -2725,6 +2744,8 @@ void ThemeTypeEditor::_update_type_items() {
 				item_editor->set_value(ThemeDB::get_singleton()->get_default_theme()->get_font_size(E.key, edited_type));
 				item_editor->set_read_only(true);
 			}
+
+			_update_item_token_state(item_control, Theme::DATA_TYPE_FONT_SIZE, E.key, item_editor);
 
 			_add_focusable(item_editor);
 			font_size_items_list->add_child(item_control);
@@ -3251,6 +3272,123 @@ void ThemeTypeEditor::_item_rename_canceled(int p_data_type, String p_item_name,
 	Object::cast_to<Button>(p_control->get_child(3))->show();
 }
 
+String ThemeTypeEditor::_get_theme_item_property(Theme::DataType p_data_type, const String &p_item_name) const {
+	String section;
+	switch (p_data_type) {
+		case Theme::DATA_TYPE_COLOR:
+			section = "colors";
+			break;
+		case Theme::DATA_TYPE_CONSTANT:
+			section = "constants";
+			break;
+		case Theme::DATA_TYPE_FONT_SIZE:
+			section = "font_sizes";
+			break;
+		default:
+			return String();
+	}
+
+	// Matches the property path Theme exposes in the inspector
+	// ("<Type>/<Section>/<Item>"), so theme editor and inspector links share the
+	// same metadata key on the Theme resource.
+	return edited_type + "/" + section + "/" + p_item_name;
+}
+
+void ThemeTypeEditor::_item_token_chain_pressed(int p_data_type, const String &p_item_name, Button *p_anchor) {
+	DesignTokenInspectorPlugin *plugin = DesignTokenInspectorPlugin::get_singleton();
+	if (!plugin || edited_theme.is_null()) {
+		return;
+	}
+
+	String prop = _get_theme_item_property((Theme::DataType)p_data_type, p_item_name);
+	if (prop.is_empty()) {
+		return;
+	}
+
+	Variant::Type vtype;
+	switch ((Theme::DataType)p_data_type) {
+		case Theme::DATA_TYPE_COLOR:
+			vtype = Variant::COLOR;
+			break;
+		case Theme::DATA_TYPE_CONSTANT:
+		case Theme::DATA_TYPE_FONT_SIZE:
+			vtype = Variant::INT;
+			break;
+		default:
+			return;
+	}
+
+	plugin->open_picker(edited_theme.ptr(), prop, vtype, p_anchor);
+}
+
+void ThemeTypeEditor::_update_item_token_state(Control *p_row, Theme::DataType p_data_type, const String &p_item_name, Control *p_editor) {
+	Button *chain_button = Object::cast_to<Button>(p_row->get_meta("_token_chain", (Object *)nullptr));
+	if (!chain_button) {
+		return;
+	}
+
+	DesignTokenInspectorPlugin *plugin = DesignTokenInspectorPlugin::get_singleton();
+	String linked;
+	if (plugin && edited_theme.is_valid()) {
+		linked = plugin->get_linked_token(edited_theme.ptr(), _get_theme_item_property(p_data_type, p_item_name));
+		if (!linked.is_empty()) {
+			plugin->register_link(edited_theme.ptr(), _get_theme_item_property(p_data_type, p_item_name));
+		}
+	}
+
+	// Always use the connected chain icon; state is shown through color only.
+	// Resolve the icon/color from `this` (the dock, already in the tree) rather
+	// than `chain_button`, which is not yet in the tree here and would otherwise
+	// fall back to the missing-icon placeholder and a default (black) color.
+	chain_button->set_button_icon(get_editor_theme_icon(SNAME("Linked")));
+
+	if (linked.is_empty()) {
+		Color c(1, 1, 1, 0.85);
+		chain_button->set_tooltip_text(TTR("Link this value to a design token"));
+		chain_button->add_theme_color_override(SNAME("icon_normal_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_hover_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_pressed_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_focus_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_hover_pressed_color"), c);
+	} else {
+		Color c = get_theme_color(SNAME("accent_color"), EditorStringName(Editor));
+		chain_button->set_tooltip_text(vformat(TTR("Linked to \"%s\".\nClick to change the link."), linked));
+		chain_button->add_theme_color_override(SNAME("icon_normal_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_hover_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_pressed_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_focus_color"), c);
+		chain_button->add_theme_color_override(SNAME("icon_hover_pressed_color"), c);
+	}
+
+	if (!p_editor) {
+		return;
+	}
+
+	bool locked = !linked.is_empty();
+	if (ColorPickerButton *cpb = Object::cast_to<ColorPickerButton>(p_editor)) {
+		cpb->set_disabled(locked);
+	} else if (EditorSpinSlider *ess = Object::cast_to<EditorSpinSlider>(p_editor)) {
+		ess->set_read_only(locked);
+	}
+}
+
+void ThemeTypeEditor::_refresh_token_link_states() {
+	// The theme editor normally rebuilds rows from the theme's "changed" signal,
+	// but that rebuild is focus-guarded (it bails while an internal property
+	// editor has focus). Link/unlink happens from the token picker (a popup), so
+	// rebuilding here deterministically updates chain-button and read-only state.
+	if (!edited_theme.is_valid()) {
+		return;
+	}
+	_update_type_items();
+}
+
+ThemeTypeEditor::~ThemeTypeEditor() {
+	if (DesignTokenInspectorPlugin *plugin = DesignTokenInspectorPlugin::get_singleton()) {
+		plugin->unregister_theme_refresh_callback(callable_mp(this, &ThemeTypeEditor::_refresh_token_link_states));
+	}
+}
+
 void ThemeTypeEditor::_color_item_changed(Color p_value, String p_item_name) {
 	EditorUndoRedoManager *ur = EditorUndoRedoManager::get_singleton();
 	ur->create_action(TTR("Set Color Item in Theme"), UndoRedo::MERGE_ENDS);
@@ -3533,6 +3671,11 @@ void ThemeTypeEditor::set_edited_theme(const Ref<Theme> &p_theme) {
 	edited_theme = p_theme;
 	if (edited_theme.is_valid()) {
 		edited_theme->connect_changed(callable_mp(this, &ThemeTypeEditor::_update_type_list_debounced));
+		// Register any links saved in the theme's metadata so token changes
+		// propagate to it even before its items are displayed or scanned.
+		if (DesignTokenInspectorPlugin *plugin = DesignTokenInspectorPlugin::get_singleton()) {
+			plugin->register_theme_links(edited_theme.ptr());
+		}
 		_update_type_list();
 	}
 
@@ -3571,6 +3714,10 @@ bool ThemeTypeEditor::is_stylebox_pinned(Ref<StyleBox> p_stylebox) {
 }
 
 ThemeTypeEditor::ThemeTypeEditor() {
+	if (DesignTokenInspectorPlugin *plugin = DesignTokenInspectorPlugin::get_singleton()) {
+		plugin->register_theme_refresh_callback(callable_mp(this, &ThemeTypeEditor::_refresh_token_link_states));
+	}
+
 	VBoxContainer *main_vb = memnew(VBoxContainer);
 	add_child(main_vb);
 

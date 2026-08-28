@@ -40,11 +40,27 @@
 #include "editor/inspector/editor_properties.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
+#include "scene/gui/control.h"
 #include "scene/gui/item_list.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/popup.h"
-#include "scene/gui/popup_menu.h"
+#include "scene/main/node.h"
+#include "scene/resources/theme.h"
+
+// Links for theme items are stored in a single Dictionary metadata entry:
+// theme item paths ("Type/section/item") contain slashes, which Object::set_meta
+// rejects as invalid identifier characters, so they can't be stored as
+// per-property metadata like node/resource property links ("__design_token_<prop>").
+static const char *THEME_LINKS_META_KEY = "_design_token_theme_links";
+
+static Dictionary _get_theme_links(const Object *p_object) {
+	return p_object->get_meta(THEME_LINKS_META_KEY, Dictionary());
+}
+
+static void _set_theme_links(Object *p_object, const Dictionary &p_links) {
+	p_object->set_meta(THEME_LINKS_META_KEY, p_links);
+}
 
 // ----------------------------------------------------------------
 // DesignTokenPropertyEditor
@@ -101,11 +117,11 @@ void DesignTokenPropertyEditor::_on_chain_pressed() {
 	if (plugin.is_null()) {
 		return;
 	}
-	if (linked_token.is_empty()) {
-		plugin->_open_token_picker(this);
-	} else {
-		plugin->_open_linked_menu(this);
+	Object *obj = get_edited_object();
+	if (!obj) {
+		return;
 	}
+	plugin->open_picker(obj, String(get_edited_property()), get_property_type(), chain_button);
 }
 
 void DesignTokenPropertyEditor::_refresh_chain_state() {
@@ -123,7 +139,7 @@ void DesignTokenPropertyEditor::_refresh_chain_state() {
 	link_state_checked = true;
 
 	if (plugin.is_valid() && obj && !linked_token.is_empty()) {
-		plugin->_register_link(obj, String(get_edited_property()));
+		plugin->register_link(obj, String(get_edited_property()));
 	}
 
 	_update_chain_visuals();
@@ -134,6 +150,9 @@ void DesignTokenPropertyEditor::_update_chain_visuals() {
 	if (!is_inside_tree()) {
 		return;
 	}
+
+	// Always use the connected chain icon; state is shown through color only.
+	chain_button->set_button_icon(chain_button->get_editor_theme_icon(SNAME("Linked")));
 
 	if (linked_token.is_empty()) {
 		Color c(1, 1, 1, 0.85);
@@ -152,7 +171,6 @@ void DesignTokenPropertyEditor::_update_chain_visuals() {
 		chain_button->add_theme_color_override(SNAME("icon_focus_color"), c);
 		chain_button->add_theme_color_override(SNAME("icon_hover_pressed_color"), c);
 	}
-	chain_button->set_button_icon(chain_button->get_editor_theme_icon(SNAME("Linked")));
 }
 
 DesignTokenPropertyEditor::DesignTokenPropertyEditor(const Ref<DesignTokenInspectorPlugin> &p_plugin, Object *p_object,
@@ -201,12 +219,12 @@ void DesignTokenInspectorPlugin::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "library", PROPERTY_HINT_RESOURCE_TYPE, "DesignTokenLibrary"), "set_library", "get_library");
 }
 
-void DesignTokenInspectorPlugin::_register_link(Object *p_object, const String &p_property) {
+void DesignTokenInspectorPlugin::register_link(Object *p_object, const String &p_property) {
 	ERR_FAIL_NULL(p_object);
 	linked_properties[p_object->get_instance_id()].insert(p_property);
 }
 
-void DesignTokenInspectorPlugin::_unregister_link(Object *p_object, const String &p_property) {
+void DesignTokenInspectorPlugin::unregister_link(Object *p_object, const String &p_property) {
 	ERR_FAIL_NULL(p_object);
 	auto iter = linked_properties.find(p_object->get_instance_id());
 	if (iter) {
@@ -218,26 +236,53 @@ void DesignTokenInspectorPlugin::_unregister_link(Object *p_object, const String
 	}
 }
 
-void DesignTokenInspectorPlugin::_link_to(Object *p_object, const String &p_property, const String &p_token_name) {
+void DesignTokenInspectorPlugin::link_property(Object *p_object, const String &p_property, const String &p_token_name) {
 	ERR_FAIL_NULL(p_object);
 	ERR_FAIL_COND(library.is_null());
 
-	p_object->set_meta("__design_token_" + p_property, p_token_name);
-	_register_link(p_object, p_property);
+	register_link(p_object, p_property);
+
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
+		Dictionary links = _get_theme_links(theme);
+		links[p_property] = p_token_name;
+		_set_theme_links(theme, links);
+	} else {
+		p_object->set_meta("__design_token_" + p_property, p_token_name);
+	}
 
 	Variant value = library->get_token_value_by_name(p_token_name);
 	if (value.get_type() != Variant::NIL) {
 		p_object->set(p_property, value);
 	}
 
+	// Theme items apply values through Theme::_set which emits "changed", so any
+	// open theme editor pick up the new link through its existing listener.
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
+		theme->emit_changed();
+		notify_theme_links_changed(theme);
+	}
+
 	_refresh_inspector();
 }
 
-void DesignTokenInspectorPlugin::_unlink_property(Object *p_object, const String &p_property) {
+void DesignTokenInspectorPlugin::unlink_property(Object *p_object, const String &p_property) {
 	ERR_FAIL_NULL(p_object);
 
-	p_object->remove_meta("__design_token_" + p_property);
-	_unregister_link(p_object, p_property);
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
+		Dictionary links = _get_theme_links(theme);
+		links.erase(p_property);
+		_set_theme_links(theme, links);
+	} else {
+		p_object->remove_meta("__design_token_" + p_property);
+	}
+	unregister_link(p_object, p_property);
+
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
+		// No value changes when unlinking, so force a refresh so theme editors
+		// re-enable their rows and update the chain button state.
+		theme->emit_changed();
+		notify_theme_links_changed(theme);
+	}
 
 	_refresh_inspector();
 }
@@ -246,6 +291,25 @@ void DesignTokenInspectorPlugin::_refresh_inspector() {
 	EditorInspector *inspector = InspectorDock::get_inspector_singleton();
 	if (inspector) {
 		inspector->update_tree();
+	}
+}
+
+void DesignTokenInspectorPlugin::register_theme_refresh_callback(const Callable &p_callback) {
+	if (!p_callback.is_valid()) {
+		return;
+	}
+	if (!theme_refresh_callbacks.has(p_callback)) {
+		theme_refresh_callbacks.push_back(p_callback);
+	}
+}
+
+void DesignTokenInspectorPlugin::unregister_theme_refresh_callback(const Callable &p_callback) {
+	theme_refresh_callbacks.erase(p_callback);
+}
+
+void DesignTokenInspectorPlugin::notify_theme_links_changed(const Theme *p_theme) {
+	for (const Callable &cb : theme_refresh_callbacks) {
+		cb.call();
 	}
 }
 
@@ -295,81 +359,67 @@ bool DesignTokenInspectorPlugin::parse_property(Object *p_object, const Variant:
 
 String DesignTokenInspectorPlugin::get_linked_token(Object *p_object, const String &p_property) const {
 	ERR_FAIL_NULL_V(p_object, String());
+	if (const Theme *theme = Object::cast_to<Theme>(p_object)) {
+		Dictionary links = _get_theme_links(theme);
+		return links.get(p_property, String());
+	}
 	return p_object->get_meta("__design_token_" + p_property, String());
 }
 
-void DesignTokenInspectorPlugin::_open_token_picker(DesignTokenPropertyEditor *p_editor) {
-	ERR_FAIL_NULL(p_editor);
-
-	Object *obj = p_editor->get_edited_object();
-	ERR_FAIL_NULL(obj);
+void DesignTokenInspectorPlugin::open_picker(Object *p_object, const String &p_property, Variant::Type p_type, Control *p_anchor) {
+	ERR_FAIL_NULL(p_object);
 
 	if (library.is_null()) {
 		return;
 	}
 
-	pending_editor = p_editor;
-	pending_object_id = obj->get_instance_id();
-	pending_property = p_editor->get_property_path();
-	pending_type = p_editor->get_property_type();
+	picker_anchor = p_anchor;
+	pending_object_id = p_object->get_instance_id();
+	pending_property = p_property;
+	pending_type = p_type;
 
 	_ensure_picker();
 	_refresh_token_picker();
 
 	token_picker->set_title(vformat(TTR("Link \"%s\" to a Token"), pending_property));
-	token_picker->popup_centered(Vector2i(360, 400));
+
+	// Pin the popup to a fixed size. Popup windows with wrap_controls resize to
+	// their content minimum, which on the very first open (before the popup has
+	// ever been laid out) can be computed too large and get clamped to the whole
+	// embedder rect by Popup::_popup_adjust_rect. Pinning min == max keeps the
+	// size deterministic (360x420) on every open.
+	const Size2i picker_size = Size2i(360, 420);
+	token_picker->set_min_size(picker_size);
+	token_picker->set_max_size(picker_size);
+	token_picker->reset_size();
+
+	// Position relative to the anchor button, opening above the anchor (which is
+	// right under the cursor when invoked from a chain button), horizontally
+	// centered on it. Only falls back to below when there isn't room above.
+	if (picker_anchor && picker_anchor->is_inside_tree()) {
+		Size2 anchor_pos = picker_anchor->get_screen_position();
+		float viewport_height = picker_anchor->get_viewport_rect().size.y;
+		bool fits_above = anchor_pos.y - picker_size.y >= 0;
+		bool fits_below = anchor_pos.y + picker_anchor->get_size().y + picker_size.y <= viewport_height;
+		bool show_above = fits_above || !fits_below;
+		float v_offset = show_above ? -picker_size.y : picker_anchor->get_size().y;
+		float h_offset = (picker_anchor->get_size().x - picker_size.x) / 2.0;
+		token_picker->set_position((anchor_pos + Vector2(h_offset, v_offset)).floor());
+	} else {
+		Rect2i usable_rect = token_picker->get_usable_parent_rect();
+		if (usable_rect != Rect2i()) {
+			token_picker->set_position(usable_rect.position + (usable_rect.size - picker_size) / 2);
+		} else {
+			token_picker->set_position(Vector2i());
+		}
+	}
+	token_picker->popup();
 	search_line_edit->grab_focus();
-}
-
-void DesignTokenInspectorPlugin::_open_linked_menu(DesignTokenPropertyEditor *p_editor) {
-	ERR_FAIL_NULL(p_editor);
-
-	if (!linked_menu) {
-		linked_menu = memnew(PopupMenu);
-		linked_menu->add_item(TTR("Edit in Library…"), 0);
-		linked_menu->add_item(TTR("Change Link…"), 1);
-		linked_menu->add_separator();
-		linked_menu->add_item(TTR("Unlink"), 2);
-		linked_menu->connect(SNAME("id_pressed"), callable_mp(this, &DesignTokenInspectorPlugin::_on_linked_menu_id));
-		EditorNode::get_singleton()->get_gui_base()->add_child(linked_menu);
-	}
-
-	pending_editor = p_editor;
-	pending_object_id = p_editor->get_edited_object() ? p_editor->get_edited_object()->get_instance_id() : ObjectID();
-	pending_property = p_editor->get_property_path();
-	pending_type = p_editor->get_property_type();
-
-	linked_menu->set_item_text(0, vformat(TTR("Edit \"%s\" in Library…"), p_editor->get_linked_token()));
-	linked_menu->set_position((p_editor->get_chain_button()->get_global_position() + Vector2(0, p_editor->get_chain_button()->get_size().y)).floor());
-	linked_menu->popup();
-}
-
-void DesignTokenInspectorPlugin::_on_linked_menu_id(int p_id) {
-	DesignTokenPropertyEditor *editor = Object::cast_to<DesignTokenPropertyEditor>(pending_editor);
-	switch (p_id) {
-		case 0: { // Edit in Library
-			_navigate_to_library();
-		} break;
-		case 1: { // Change Link
-			if (editor) {
-				_open_token_picker(editor);
-			}
-		} break;
-		case 2: { // Unlink
-			Object *obj = ObjectDB::get_instance(pending_object_id);
-			if (obj) {
-				_unlink_property(obj, pending_property);
-			}
-		} break;
-	}
 }
 
 void DesignTokenInspectorPlugin::_navigate_to_library() {
 	if (library.is_null()) {
 		return;
-	}
-	if (linked_menu) {
-		linked_menu->hide();
 	}
 	EditorNode::get_singleton()->edit_resource(library);
 }
@@ -384,6 +434,7 @@ void DesignTokenInspectorPlugin::_ensure_picker() {
 
 	VBoxContainer *vbox = memnew(VBoxContainer);
 	vbox->set_v_size_flags(Control::SIZE_EXPAND_FILL);
+	vbox->set_custom_minimum_size(Size2(0, 300));
 	token_picker->add_child(vbox);
 
 	picker_hint = memnew(Label);
@@ -489,11 +540,12 @@ void DesignTokenInspectorPlugin::_on_picker_item_activated(int p_index) {
 	ERR_FAIL_NULL(obj);
 
 	String token_name = token_item_list->get_item_metadata(p_index);
-	_link_to(obj, pending_property, token_name);
+	link_property(obj, pending_property, token_name);
 
 	token_picker->hide();
 	pending_object_id = ObjectID();
 	pending_property = String();
+	picker_anchor = nullptr;
 }
 
 void DesignTokenInspectorPlugin::_on_picker_create_token() {
@@ -518,11 +570,12 @@ void DesignTokenInspectorPlugin::_on_picker_create_token() {
 	library->set_token_value(index, obj->get(pending_property));
 	library->set_token_name(index, name);
 
-	_link_to(obj, pending_property, name);
+	link_property(obj, pending_property, name);
 
 	token_picker->hide();
 	pending_object_id = ObjectID();
 	pending_property = String();
+	picker_anchor = nullptr;
 }
 
 void DesignTokenInspectorPlugin::_on_picker_open_in_library() {
@@ -533,17 +586,24 @@ void DesignTokenInspectorPlugin::_on_picker_open_in_library() {
 void DesignTokenInspectorPlugin::_on_picker_unlink() {
 	Object *obj = ObjectDB::get_instance(pending_object_id);
 	if (obj) {
-		_unlink_property(obj, pending_property);
+		unlink_property(obj, pending_property);
 	}
 	token_picker->hide();
 	pending_object_id = ObjectID();
 	pending_property = String();
+	picker_anchor = nullptr;
 }
 
 void DesignTokenInspectorPlugin::_on_library_changed() {
 	if (library.is_null()) {
 		return;
 	}
+
+	// Find links saved in object metadata from a previous editor session. The
+	// inspector only registers links for objects that have been displayed since
+	// startup, so without this token changes would be silently dropped for
+	// linked nodes/resources that weren't selected yet.
+	_scan_edited_scenes_links();
 
 	// Propagate token values to every object with linked properties.
 	List<ObjectID> stale_ids;
@@ -555,13 +615,18 @@ void DesignTokenInspectorPlugin::_on_library_changed() {
 		}
 
 		for (const StringName &prop : E.value) {
-			if (!obj->has_meta("__design_token_" + prop)) {
+			String token_name = get_linked_token(obj, prop);
+			if (token_name.is_empty()) {
 				continue;
 			}
-			String token_name = obj->get_meta("__design_token_" + prop);
 			Variant value = library->get_token_value_by_name(token_name);
 			if (value.get_type() != Variant::NIL) {
 				obj->set(prop, value);
+				if (Theme *theme = Object::cast_to<Theme>(obj)) {
+					// Object::set() on a Theme applies dynamic properties without
+					// notifying, so emit "changed" so open theme editors refresh.
+					theme->emit_changed();
+				}
 			}
 		}
 	}
@@ -581,6 +646,112 @@ void DesignTokenInspectorPlugin::_on_library_changed() {
 	}
 }
 
+void DesignTokenInspectorPlugin::_scan_edited_scenes_links() {
+	EditorData &editor_data = EditorNode::get_editor_data();
+	const int scene_count = editor_data.get_edited_scene_count();
+	for (int i = 0; i < scene_count; i++) {
+		Node *root = editor_data.get_edited_scene_root(i);
+		if (root) {
+			_discover_node_links(root);
+		}
+	}
+
+	// A Theme (or any other resource) opened in the Inspector may not be a
+	// scene root, so scan it as well.
+	EditorInspector *inspector = InspectorDock::get_inspector_singleton();
+	if (inspector) {
+		Object *edited = inspector->get_edited_object();
+		if (edited) {
+			_discover_object_links(edited);
+		}
+	}
+}
+
+void DesignTokenInspectorPlugin::_discover_node_links(Node *p_node) {
+	ERR_FAIL_NULL(p_node);
+
+	_discover_object_links(p_node);
+
+	// Theme items are linked through an explicit Theme resource; discover the
+	// effective theme of every control so linked themes propagate too.
+	if (Control *control = Object::cast_to<Control>(p_node)) {
+		Ref<Theme> theme = control->get_theme();
+		if (theme.is_valid()) {
+			_discover_object_links(theme.ptr());
+		}
+	}
+
+	for (int i = 0; i < p_node->get_child_count(); i++) {
+		_discover_node_links(p_node->get_child(i));
+	}
+}
+
+void DesignTokenInspectorPlugin::_discover_object_links(Object *p_object) {
+	ERR_FAIL_NULL(p_object);
+
+	const ObjectID id = p_object->get_instance_id();
+	if (scanned_objects.has(id)) {
+		return;
+	}
+	scanned_objects.insert(id);
+
+	if (const Theme *theme = Object::cast_to<Theme>(p_object)) {
+		_register_theme_links(theme);
+		return;
+	}
+
+	const String prefix = "__design_token_";
+	HashSet<StringName> props;
+	List<StringName> meta_keys;
+	p_object->get_meta_list(&meta_keys);
+	for (const StringName &meta : meta_keys) {
+		const String meta_name = String(meta);
+		if (meta_name.begins_with(prefix)) {
+			props.insert(StringName(meta_name.substr(prefix.length())));
+		}
+	}
+
+	if (!props.is_empty()) {
+		linked_properties[id] = props;
+	}
+}
+
+void DesignTokenInspectorPlugin::register_theme_links(const Theme *p_theme) {
+	ERR_FAIL_NULL(p_theme);
+	_register_theme_links(p_theme);
+}
+
+void DesignTokenInspectorPlugin::_register_theme_links(const Theme *p_theme) {
+	ERR_FAIL_NULL(p_theme);
+
+	const ObjectID id = p_theme->get_instance_id();
+	const Dictionary links = _get_theme_links(p_theme);
+	HashSet<StringName> props;
+	for (const Variant &key : links.keys()) {
+		props.insert(key);
+	}
+
+	if (!props.is_empty()) {
+		linked_properties[id] = props;
+	}
+	scanned_objects.insert(id);
+
+	// Theme items can point to sub-resources (StyleBox, Font, Texture2D, ...).
+	// Links are stored directly on those sub-resources, so discover them too.
+	List<StringName> type_list;
+	p_theme->get_type_list(&type_list);
+	for (const StringName &type_name : type_list) {
+		List<StringName> style_list;
+		p_theme->get_stylebox_list(type_name, &style_list);
+		for (const StringName &style_name : style_list) {
+			Ref<StyleBox> style = p_theme->get_stylebox(style_name, type_name);
+			if (style.is_valid()) {
+				_discover_object_links(style.ptr());
+			}
+		}
+	}
+}
+
 void DesignTokenInspectorPlugin::set_library(const Ref<DesignTokenLibrary> &p_library) {
 	if (library.is_valid()) {
 		library->disconnect("changed", callable_mp(this, &DesignTokenInspectorPlugin::_on_library_changed));
@@ -596,16 +767,26 @@ void DesignTokenInspectorPlugin::set_library(const Ref<DesignTokenLibrary> &p_li
 
 	// Reloading or swapping the library may add/remove chain buttons.
 	_refresh_inspector();
+
+	// Discover links saved in object metadata from previous editor sessions so
+	// propagation and chain-button state work before the first token edit.
+	_scan_edited_scenes_links();
 }
 
 Ref<DesignTokenLibrary> DesignTokenInspectorPlugin::get_library() const {
 	return library;
 }
 
+DesignTokenInspectorPlugin *DesignTokenInspectorPlugin::singleton = nullptr;
+
 DesignTokenInspectorPlugin::DesignTokenInspectorPlugin() {
+	singleton = this;
 }
 
 DesignTokenInspectorPlugin::~DesignTokenInspectorPlugin() {
+	if (singleton == this) {
+		singleton = nullptr;
+	}
 	if (library.is_valid()) {
 		library->disconnect("changed", callable_mp(this, &DesignTokenInspectorPlugin::_on_library_changed));
 		library->disconnect("token_renamed", callable_mp(this, &DesignTokenInspectorPlugin::_on_token_renamed));
@@ -624,10 +805,26 @@ void DesignTokenInspectorPlugin::_on_token_renamed(const String &p_old_name, con
 		if (!obj) {
 			continue;
 		}
-		for (const StringName &prop : E.value) {
-			String meta_key = "__design_token_" + prop;
-			if (obj->has_meta(meta_key) && String(obj->get_meta(meta_key)) == p_old_name) {
-				obj->set_meta(meta_key, p_new_name);
+		if (Theme *theme = Object::cast_to<Theme>(obj)) {
+			Dictionary links = _get_theme_links(theme);
+			bool changed = false;
+			for (const StringName &prop : E.value) {
+				String token = links.get(String(prop), String());
+				if (token == p_old_name) {
+					links[String(prop)] = p_new_name;
+					changed = true;
+				}
+			}
+			if (changed) {
+				_set_theme_links(theme, links);
+				theme->emit_changed();
+			}
+		} else {
+			for (const StringName &prop : E.value) {
+				String meta_key = "__design_token_" + prop;
+				if (obj->has_meta(meta_key) && String(obj->get_meta(meta_key)) == p_old_name) {
+					obj->set_meta(meta_key, p_new_name);
+				}
 			}
 		}
 	}
