@@ -265,6 +265,7 @@ void StyleBoxFlat::_set_texture(Ref<Texture2D> *p_destination, const Ref<Texture
 }
 
 void StyleBoxFlat::_texture_changed() {
+	bg_texture_image.unref();
 	emit_changed();
 }
 
@@ -529,6 +530,31 @@ inline void adapt_values(int p_index_a, int p_index_b, real_t *adapted_values, c
 	adapted_values[p_index_b] = MIN(MIN(value_b * factor, p_max_b), adapted_values[p_index_b]);
 }
 
+// Samples the background texture at a UV coordinate, so the border blend can fade into the
+// actual colors drawn at the background's edge instead of the flat background color.
+inline Color sample_texture_bilinear(const Image &p_image, const Point2 &p_uv) {
+	const int width = p_image.get_width();
+	const int height = p_image.get_height();
+	if (width <= 0 || height <= 0) {
+		return Color(1, 1, 1, 1);
+	}
+
+	const real_t x = p_uv.x * width - 0.5f;
+	const real_t y = p_uv.y * height - 0.5f;
+
+	const int x0 = CLAMP((int)Math::floor(x), 0, width - 1);
+	const int y0 = CLAMP((int)Math::floor(y), 0, height - 1);
+	const int x1 = MIN(x0 + 1, width - 1);
+	const int y1 = MIN(y0 + 1, height - 1);
+
+	const float frac_x = CLAMP((float)(x - Math::floor(x)), 0.0f, 1.0f);
+	const float frac_y = CLAMP((float)(y - Math::floor(y)), 0.0f, 1.0f);
+
+	Color top = p_image.get_pixel(x0, y0).lerp(p_image.get_pixel(x1, y0), frac_x);
+	Color bottom = p_image.get_pixel(x0, y1).lerp(p_image.get_pixel(x1, y1), frac_x);
+	return top.lerp(bottom, frac_y);
+}
+
 // Generates the triangle strip for one side's border texture. At sharp corners the strip is
 // mitered: it is cut along the diagonal that joins the outer corner vertex to the inner
 // (background) corner vertex, so adjacent sides meet without overlapping. At rounded corners
@@ -540,7 +566,8 @@ inline void adapt_values(int p_index_a, int p_index_b, real_t *adapted_values, c
 // gradients for boxes with textured sides).
 inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_indices, Vector<Color> &r_colors, Vector<Point2> &r_uvs,
 		const Rect2 &p_style_rect, const real_t p_border[4], const real_t p_adapted_corner[4], Side p_side, int p_corner_detail,
-		real_t p_outer_inset, const Vector2 &p_skew, const Color &p_color, bool p_fade_at_start_corner, bool p_fade_at_end_corner) {
+		real_t p_outer_inset, const Vector2 &p_skew, const Color &p_color, bool p_fade_at_start_corner, bool p_fade_at_end_corner,
+		bool p_blend = false) {
 	const int corner_start = (p_side + 3) % 4;
 	const int corner_end = (int)p_side % 4;
 
@@ -716,17 +743,24 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 
 	for (int j = 0; j < col_count; j++) {
 		const real_t u = (real_t)j / (col_count - 1);
-		const Color col(p_color.r, p_color.g, p_color.b, p_color.a * col_alphas[j]);
+		const real_t alpha = p_color.a * col_alphas[j];
 		for (int r = 0; r < rows; r++) {
 			Point2 pt = col_pts[j][r];
 			if (skewed) {
 				pt += Vector2(-p_skew.x * (pt.y - center.y), -p_skew.y * (pt.x - center.x));
 			}
-			// With antialiasing, only the two solid middle rows carry the column's alpha;
-			// both edge rows fade to nothing.
-			const bool solid_row = !faded_edges || (r == 1 || r == 2);
+			real_t row_alpha;
+			if (p_blend) {
+				// When the border blends into the background, the strip fades from opaque at
+				// its outer edge (the antialiasing row keeps the silhouette fade) to transparent
+				// at its inner edge, so the blended flat ring beneath shows the background's edge
+				// color. The fade spans the border width only, never crossing into the background.
+				row_alpha = faded_edges ? (r == 1 ? 1.0 : 0.0) : (r == 0 ? 1.0 : 0.0);
+			} else {
+				row_alpha = (!faded_edges || r == 1 || r == 2) ? 1.0 : 0.0;
+			}
 			verts_ptr[vert_base + j * rows + r] = pt;
-			colors_ptr[color_base + j * rows + r] = solid_row ? col : Color(p_color.r, p_color.g, p_color.b, 0);
+			colors_ptr[color_base + j * rows + r] = Color(p_color.r, p_color.g, p_color.b, alpha * row_alpha);
 			uvs_ptr[uv_base + j * rows + r] = Vector2(u, col_vs[j][r]);
 		}
 	}
@@ -824,6 +858,23 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Color border_color_blend = (draw_center ? bg_color_animated : border_color_alpha);
 	Color border_color_inner = blend_on ? border_color_blend : border_color_animated;
 
+	// When the border blends into the background, its inner edge must fade into the colors
+	// actually drawn at the background's edge. If the background is textured, those colors are
+	// looked up by sampling the texture at the border's inner boundary instead of using the
+	// flat background color.
+	const bool blend_with_bg_texture = blend_on && draw_center && bg_texture.is_valid();
+
+	if (blend_with_bg_texture && bg_texture_image.is_null()) {
+		Ref<Image> image = bg_texture->get_image();
+		if (image.is_valid() && image->is_compressed()) {
+			image = image->duplicate();
+			image->decompress();
+		}
+		if (image.is_valid() && !image->is_compressed()) {
+			bg_texture_image = image;
+		}
+	}
+
 	real_t aa_size_scaled = 1.0f;
 	if (aa_on) {
 		real_t scale_factor = TextServer::get_current_drawn_item_oversampling();
@@ -875,6 +926,11 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> si;
 	Vector<int> isi;
 
+	// Vertex range of the flat border ring. Used to overwrite its inner edge with the sampled
+	// background texture color when the border blends into a textured background.
+	int border_ring_base = -1;
+	int border_ring_count = 0;
+
 	// Per-side outer fade width for the border texture strips: the texture fades out over
 	// this distance from the true silhouette, providing its own outer antialiasing. The flat
 	// ring's solid area starts exactly where the fade reaches full opacity.
@@ -915,8 +971,10 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	// Create border (no AA).
 	if (draw_border && !aa_on) {
+		border_ring_base = verts.size();
 		draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
 				border_style_rect, infill_rect, border_color_inner, border_color_animated, corner_detail, skew);
+		border_ring_count = verts.size() - border_ring_base;
 	}
 
 	// Create infill (no AA).
@@ -989,8 +1047,10 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
 
 			// Create border ring, not antialiased yet
+			border_ring_base = verts.size();
 			draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
 					outer_rect_aa_colored, ((blend_on) ? infill_rect : inner_rect_aa_colored), border_color_inner, border_color_animated, corner_detail, skew);
+			border_ring_count = verts.size() - border_ring_base;
 			if (!blend_on && !has_border_textures) {
 				// Add antialiasing on the ring inner border. Skipped when any side has a border
 				// texture: those sides' strips carry their own inner fade (see below), and
@@ -1055,6 +1115,17 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		uvs_ptr[i].y = (verts[i].y - uv_rect.position.y) / uv_rect.size.height;
 	}
 
+	// When blending, the border ring's inner edge fades into the background's edge color. If the
+	// background has a texture, sample it at the ring's inner boundary so the border blends into
+	// the actual background colors drawn there, never into the background's interior.
+	if (blend_with_bg_texture && bg_texture_image.is_valid() && border_ring_count > 0) {
+		Color *colors_ptr = colors.ptrw();
+		for (int i = 0; i < border_ring_count; i += 2) {
+			const int idx = border_ring_base + i;
+			colors_ptr[idx] = sample_texture_bilinear(*bg_texture_image.ptr(), uvs_ptr[idx]) * bg_color_animated;
+		}
+	}
+
 	// Draw stylebox.
 	RenderingServer *vs = RenderingServer::get_singleton();
 	if (!share_indices) {
@@ -1100,7 +1171,7 @@ void StyleBoxFlat::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			Vector<Color> tex_colors;
 			Vector<Point2> tex_uvs;
 			draw_border_texture_strip(tex_verts, tex_indices, tex_colors, tex_uvs, style_rect, adapted_border, adapted_corner,
-					(Side)i, corner_detail, tex_outer_inset[i], skew, border_color_animated, fade_start, fade_end);
+					(Side)i, corner_detail, tex_outer_inset[i], skew, border_color_animated, fade_start, fade_end, blend_on);
 
 			if (!tex_indices.is_empty()) {
 				vs->canvas_item_add_triangle_array(p_canvas_item, tex_indices, tex_verts, tex_colors, tex_uvs, {}, {}, tex->get_rid());

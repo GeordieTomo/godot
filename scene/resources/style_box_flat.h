@@ -32,6 +32,7 @@
 
 #include "scene/resources/style_box.h"
 
+class Image;
 class Texture2D;
 
 class StyleBoxFlat : public StyleBox {
@@ -62,6 +63,10 @@ class StyleBoxFlat : public StyleBox {
 	Ref<Texture2D> bg_texture;
 	Ref<Texture2D> border_textures[4];
 	Ref<Texture2D> shadow_texture;
+
+	// Cached image of `bg_texture`, used to sample the background's edge color for the
+	// border blend. Invalidated whenever any texture changes.
+	mutable Ref<Image> bg_texture_image;
 
 	void _set_texture(Ref<Texture2D> *p_destination, const Ref<Texture2D> &p_texture);
 	void _texture_changed();
