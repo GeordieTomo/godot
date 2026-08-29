@@ -500,11 +500,13 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	}
 
 	// Outset bevels map the side colors directly to their sides (LEFT=0-1, TOP=2-3,
-	// RIGHT=4-5, BOTTOM=6-7). Inset bevels rotate the mapping by half a turn, so each
-	// side is shaded by the opposing exitant angle. bevel_style is a float in [-1, 1]:
-	// 1 = fully outset, -1 = fully inset, values in between blend continuously between
-	// the two mappings.
-	const real_t start_pos = (1.0 - bevel_style_animated) * 2.0; // 0 (outset) .. 4 (inset)
+	// RIGHT=4-5, BOTTOM=6-7). Inset bevels shade each side with the opposing side's
+	// color (light and shadow swap). bevel_style is a float in [-1, 1]: 1 = fully
+	// outset, -1 = fully inset. Values in between simply mix each slot's outset color
+	// with its inset color, so the bevel reads as an extrusion growing or shrinking in
+	// depth rather than a rotating light. At 0 the opposite shades cancel out to a
+	// flat, unshaded box.
+	const real_t mix_factor = CLAMP((1.0 - bevel_style_animated) * 0.5, 0.0, 1.0);
 	Color border_colors[8];
 	Color border_alpha_colors[8];
 	Color border_blend_colors[8];
@@ -515,14 +517,9 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		bg_colors[i] = bg_color_animated;
 	}
 	for (int i = 0; i < 8; i++) {
-		// Rotate slot -> side mapping by start_pos and interpolate between the two
-		// adjacent sides for smooth, continuous bevel_style transitions.
-		const real_t shifted = (real_t)i - start_pos;
-		const real_t floored = Math::floor(shifted);
-		const int slot0 = (int)Math::fposmod(floored, 8.0f);
-		const int slot1 = (int)Math::fposmod(floored + 1.0f, 8.0f);
-		const real_t t = shifted - floored;
-		border_colors[i] = side_colors[slot0 >> 1].lerp(side_colors[slot1 >> 1], t);
+		const Color outset = side_colors[i >> 1];
+		const Color inset = side_colors[(((i >> 1) + 2) & 3)];
+		border_colors[i] = outset.lerp(inset, mix_factor);
 	}
 	for (int i = 0; i < 8; i++) {
 		border_alpha_colors[i] = Color(border_colors[i].r, border_colors[i].g, border_colors[i].b, 0);
