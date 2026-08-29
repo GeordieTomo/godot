@@ -64,6 +64,7 @@ class StyleBox : public Resource {
 		Variant from;
 		Variant to;
 		Variant current;
+		double duration = 0;
 		real_t start_time = 0;
 	};
 
@@ -78,6 +79,12 @@ class StyleBox : public Resource {
 		uint64_t end_time = 0;
 		uint64_t current_time = 0;
 
+		// Duration of the "out" phase. Captured every draw frame from the box that
+		// drew to this group last frame (the "current" state, possibly the same box).
+		// It is added to the incoming box's "in" duration so a transition from A to B
+		// lasts A.out + B.in; a property change on a single box lasts box.out + box.in.
+		double out_duration = 0;
+
 		HashMap<StringName, AnimationValues> values;
 	};
 
@@ -90,6 +97,7 @@ class StyleBox : public Resource {
 
 	AnimationInfo normal_info;
 	AnimationInfo exit_info;
+	AnimationInfo out_info;
 	DrawTransform exit_transform;
 	bool should_animate_rect = true;
 
@@ -111,6 +119,7 @@ protected:
 public:
 	enum AnimationPhase {
 		PHASE_NORMAL,
+		PHASE_OUT,
 		PHASE_EXIT,
 		PHASE_MAX
 	};

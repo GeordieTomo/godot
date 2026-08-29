@@ -162,6 +162,13 @@ void StyleBox::begin_draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	// Only set up for normally drawn stylboxes, not boxes drawn during an exit animation,
 	// since the exit state depends on these.
 	if (!is_drawing_exit) {
+		// The "out" duration applies to any transition that starts this frame, not just
+		// stylebox swaps. The box that drew to this group last frame is the "current
+		// state", and this frame it gets replaced (possibly by itself, for plain property
+		// changes). A transition from A to B lasts A.duration_out + B.duration_in; when
+		// A == B a property change lasts box.duration_out + box.duration_in.
+		StyleBox *prev_box = ObjectDB::get_instance<StyleBox>(current_state.box_id);
+		current_state.out_duration = prev_box ? prev_box->out_info.duration : 0.0;
 		current_state.box_id = get_instance_id();
 		current_state.rect = current_draw_rect;
 		current_state.has_drawn_box = true;
@@ -177,7 +184,7 @@ void StyleBox::begin_draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	if (current_state.is_exiting && exit_info.duration <= 0) {
 		return;
 	}
-	if (!current_state.is_exiting && normal_info.duration <= 0) {
+	if (!current_state.is_exiting && normal_info.duration + current_state.out_duration <= 0) {
 		return;
 	}
 
@@ -217,10 +224,11 @@ void StyleBox::begin_draw(RID p_canvas_item, const Rect2 &p_rect) const {
 void StyleBox::end_draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	// Reset any draw transforms or modulates used during an exit or entrance animation.
 	if (cached_state) {
-		if (cached_state->is_exiting && exit_info.duration <= 0) {
-			return;
-		}
-		if (!cached_state->is_exiting && normal_info.duration <= 0) {
+		if (cached_state->is_exiting) {
+			if (exit_info.duration <= 0) {
+				return;
+			}
+		} else if (normal_info.duration + cached_state->out_duration <= 0) {
 			return;
 		}
 		RenderingServer *vs = RenderingServer::get_singleton();
@@ -272,22 +280,31 @@ Variant StyleBox::get_animated_value(StringName p_name, Variant p_target_value, 
 		return p_target_value;
 	}
 
-	// Skip interpolation if there is no duration.
+	// A transition's total duration is the incoming box's "in" duration plus the "out"
+	// duration captured from the box that drew to this group last frame, so it lasts
+	// A.out + B.in. The out duration is only guaranteed on the frame a transition starts
+	// (it is re-captured from the new box afterwards), so once a transition is in flight
+	// it must keep running on the snapshotted values.duration instead of being re-gated.
 	AnimationInfo info = current_state->is_exiting ? sb->exit_info : sb->normal_info;
-	if (info.duration <= 0) {
-		values.to = p_target_value;
-		values.current = p_target_value;
-		return p_target_value;
-	}
+	double out_duration = current_state->is_exiting ? 0.0 : current_state->out_duration;
+	double duration = info.duration + out_duration;
 
 	uint64_t current_time = current_state->current_time;
 
 	// Animations are only triggered when the target value has changed.
 	if (values.to != p_target_value) {
+		if (duration <= 0) {
+			// No duration (in + out): apply the change instantly, without animating.
+			values.from = p_target_value;
+			values.to = p_target_value;
+			values.current = p_target_value;
+			return p_target_value;
+		}
 		values.from = values.current;
 		values.to = p_target_value;
 		values.start_time = current_time;
-		current_state->end_time = MAX(current_state->end_time, current_time + info.duration * 1000000);
+		values.duration = duration;
+		current_state->end_time = MAX(current_state->end_time, current_time + values.duration * 1000000);
 		// One time connection to process_frame,
 		// so queue_redraw() can be triggered on nodes that can animate.
 		if (!redrawer_connected) {
@@ -309,8 +326,8 @@ Variant StyleBox::get_animated_value(StringName p_name, Variant p_target_value, 
 	}
 
 	double elapsed = (current_time - values.start_time) / 1000000.0;
-	if (elapsed < info.duration) {
-		Variant result = Animation::interpolate_variant(values.from, values.to, Tween::run_equation(info.transition, info.ease, elapsed, 0.0, 1.0, info.duration));
+	if (elapsed < values.duration) {
+		Variant result = Animation::interpolate_variant(values.from, values.to, Tween::run_equation(info.transition, info.ease, elapsed, 0.0, 1.0, values.duration));
 		values.current = result;
 		return result;
 	} else {
@@ -357,6 +374,11 @@ void StyleBox::setup_animation_frame(Control *p_node) {
 			} else {
 				it->value.has_drawn_box = false;
 				it->value.has_drawn_group = false;
+				// The out duration captured during this frame's begin_draw applies only to the
+				// transitions started by that frame's get_animated_value calls (they snapshot
+				// it into values.duration). Reset it here; the next begin_draw re-captures it
+				// from the box that just drew.
+				it->value.out_duration = 0;
 			}
 		}
 		++it;
@@ -443,19 +465,32 @@ bool StyleBox::is_animating_rect() const {
 }
 
 void StyleBox::set_animation_duration(AnimationPhase p_phase, real_t p_value) {
-	if (p_phase == PHASE_EXIT) {
-		exit_info.duration = p_value;
-	} else {
-		normal_info.duration = p_value;
+	switch (p_phase) {
+		case PHASE_NORMAL:
+			normal_info.duration = p_value;
+			break;
+		case PHASE_OUT:
+			out_info.duration = p_value;
+			break;
+		case PHASE_EXIT:
+			exit_info.duration = p_value;
+			break;
+		default:
+			break;
 	}
 	emit_changed();
 }
 
 real_t StyleBox::get_animation_duration(AnimationPhase p_phase) {
-	if (p_phase == PHASE_EXIT) {
-		return exit_info.duration;
-	} else {
-		return normal_info.duration;
+	switch (p_phase) {
+		case PHASE_NORMAL:
+			return normal_info.duration;
+		case PHASE_OUT:
+			return out_info.duration;
+		case PHASE_EXIT:
+			return exit_info.duration;
+		default:
+			return 0.0;
 	}
 }
 
@@ -536,6 +571,7 @@ void StyleBox::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("test_mask", "point", "rect"), &StyleBox::test_mask);
 
 	BIND_ENUM_CONSTANT(PHASE_NORMAL);
+	BIND_ENUM_CONSTANT(PHASE_OUT);
 	BIND_ENUM_CONSTANT(PHASE_EXIT);
 
 	ADD_GROUP("Content Margins", "content_margin_");
@@ -545,7 +581,8 @@ void StyleBox::_bind_methods() {
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "content_margin_bottom", PROPERTY_HINT_RANGE, "-1,2048,1,suffix:px"), "set_content_margin", "get_content_margin", SIDE_BOTTOM);
 
 	ADD_GROUP("Animation", "animation_");
-	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "animation_duration", PROPERTY_HINT_RANGE, "0,1,0.001,or_less,or_greater"), "set_animation_duration", "get_animation_duration", PHASE_NORMAL);
+	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "animation_duration_in", PROPERTY_HINT_RANGE, "0,1,0.001,or_less,or_greater"), "set_animation_duration", "get_animation_duration", PHASE_NORMAL);
+	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "animation_duration_out", PROPERTY_HINT_RANGE, "0,1,0.001,or_less,or_greater"), "set_animation_duration", "get_animation_duration", PHASE_OUT);
 	ADD_PROPERTYI(PropertyInfo(Variant::INT, "animation_ease", PROPERTY_HINT_ENUM, "In,Out,InOut,OutIn"), "set_animation_ease", "get_animation_ease", PHASE_NORMAL);
 	ADD_PROPERTYI(PropertyInfo(Variant::INT, "animation_transition", PROPERTY_HINT_ENUM, "Linear,Sine,Quint,Quart,Quad,Exponential,Elastic,Cubic,Circ,Bounce,Back,Spring"), "set_animation_transition", "get_animation_transition", PHASE_NORMAL);
 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "animation_animate_rect"), "set_animating_rect", "is_animating_rect");

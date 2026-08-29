@@ -31,6 +31,7 @@
 #include "style_box_bevel.h"
 
 #include "core/config/engine.h"
+#include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
 #include "core/math/math_funcs.h"
 #include "scene/resources/texture.h"
@@ -45,6 +46,73 @@
 #define BEVEL_OUTER_COLOR_B(p_corner_idx) (p_outer_colors[((p_corner_idx) * 2 + 2) % 8])
 
 namespace {
+void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
+		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled = false);
+
+// Maps the normalized position across a blended border band (0 = outer edge, 1 =
+// inner edge) to the blend amount, based on the selected blend function. A tiny
+// epsilon is used so `sample(1.0)` still reaches the curve's end value.
+real_t bevel_blend_factor(StyleBoxBevel::BevelBlendFunction p_function, const Ref<Curve> &p_curve, real_t p_t) {
+	real_t t = CLAMP(p_t, 0.0, 1.0);
+	switch (p_function) {
+		case StyleBoxBevel::BEVEL_BLEND_SMOOTHSTEP: {
+			return t * t * (3.0 - 2.0 * t);
+		}
+		case StyleBoxBevel::BEVEL_BLEND_EASE_IN: {
+			return t * t;
+		}
+		case StyleBoxBevel::BEVEL_BLEND_EASE_OUT: {
+			real_t inv = 1.0 - t;
+			return 1.0 - inv * inv;
+		}
+		case StyleBoxBevel::BEVEL_BLEND_EASE_IN_OUT: {
+			if (t < 0.5) {
+				return 2.0 * t * t;
+			}
+			real_t inv = 1.0 - t;
+			return 1.0 - 2.0 * inv * inv;
+		}
+		case StyleBoxBevel::BEVEL_BLEND_CURVE: {
+			if (p_curve.is_valid()) {
+				return CLAMP(p_curve->sample(t), 0.0, 1.0);
+			}
+			[[fallthrough]];
+		}
+		case StyleBoxBevel::BEVEL_BLEND_LINEAR:
+		default: {
+			return t;
+		}
+	}
+}
+
+// Draws the border→background fade as several concentric sub-bands of the border
+// ring. Each band interpolates the colors at its two edges, so any blend curve can
+// be approximated without needing a custom shader. With a linear function the
+// result matches the single unsplit ring exactly.
+void bevel_draw_blend_bands(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
+		const Rect2 &outer_rect, const Rect2 &inner_rect, const Color (&p_outer_colors)[8], const Color (&p_blend_colors)[8],
+		StyleBoxBevel::BevelBlendFunction p_function, const Ref<Curve> &p_curve, const int corner_detail, const Vector2 &skew) {
+	constexpr int band_count = 8;
+	for (int b = 0; b < band_count; b++) {
+		const real_t t0 = (real_t)b / band_count;
+		const real_t t1 = (real_t)(b + 1) / band_count;
+		const real_t f0 = bevel_blend_factor(p_function, p_curve, t0);
+		const real_t f1 = bevel_blend_factor(p_function, p_curve, t1);
+
+		const Rect2 band_outer = Rect2(outer_rect.position.lerp(inner_rect.position, t0), outer_rect.size.lerp(inner_rect.size, t0));
+		const Rect2 band_inner = Rect2(outer_rect.position.lerp(inner_rect.position, t1), outer_rect.size.lerp(inner_rect.size, t1));
+
+		Color band_inner_colors[8];
+		Color band_outer_colors[8];
+		for (int i = 0; i < 8; i++) {
+			band_outer_colors[i] = p_outer_colors[i].lerp(p_blend_colors[i], f0);
+			band_inner_colors[i] = p_outer_colors[i].lerp(p_blend_colors[i], f1);
+		}
+		bevel_draw_ring(verts, indices, colors, style_rect, corner_radius,
+				band_outer, band_inner, band_inner_colors, band_outer_colors, corner_detail, skew);
+	}
+}
+
 void bevel_set_inner_corner_radius(const Rect2 style_rect, const Rect2 inner_rect, const real_t corner_radius[4], real_t *inner_corner_radius) {
 	real_t border_left = inner_rect.position.x - style_rect.position.x;
 	real_t border_top = inner_rect.position.y - style_rect.position.y;
@@ -137,7 +205,7 @@ void bevel_set_corner_scale(const Rect2 &style_rect, const Rect2 &inner_rect, co
 // 0-1=left, 2-3=top, 4-5=right, 6-7=bottom. Any corner blends between the two
 // colors adjacent to it.
 void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
-		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled = false) {
+		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled) {
 	int vert_offset = verts.size();
 	int adapted_corner_detail = (corner_radius[0] > 0) || (corner_radius[1] > 0) || (corner_radius[2] > 0) || (corner_radius[3] > 0) ? corner_detail : 1;
 
@@ -265,12 +333,12 @@ void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color>
 }
 } // namespace
 
-void StyleBoxBevel::set_bevel_style(BevelStyle p_style) {
-	bevel_style = p_style;
+void StyleBoxBevel::set_bevel_style(float p_style) {
+	bevel_style = CLAMP(p_style, -1.0f, 1.0f);
 	emit_changed();
 }
 
-StyleBoxBevel::BevelStyle StyleBoxBevel::get_bevel_style() const {
+float StyleBoxBevel::get_bevel_style() const {
 	return bevel_style;
 }
 
@@ -328,43 +396,115 @@ float StyleBoxBevel::get_bevel_max_intensity_angle_ratio() const {
 	return bevel_max_intensity_angle_ratio;
 }
 
+void StyleBoxBevel::set_bevel_blend_function(BevelBlendFunction p_function) {
+	bevel_blend_function = p_function;
+	emit_changed();
+}
+
+StyleBoxBevel::BevelBlendFunction StyleBoxBevel::get_bevel_blend_function() const {
+	return bevel_blend_function;
+}
+
+void StyleBoxBevel::set_bevel_blend_curve(Ref<Curve> p_curve) {
+	if (bevel_blend_curve == p_curve) {
+		return;
+	}
+	if (bevel_blend_curve.is_valid()) {
+		bevel_blend_curve->disconnect_changed(callable_mp((Resource *)this, &StyleBoxBevel::emit_changed));
+	}
+	bevel_blend_curve = p_curve;
+	if (bevel_blend_curve.is_valid()) {
+		bevel_blend_curve->connect_changed(callable_mp((Resource *)this, &StyleBoxBevel::emit_changed));
+	}
+	emit_changed();
+}
+
+Ref<Curve> StyleBoxBevel::get_bevel_blend_curve() const {
+	return bevel_blend_curve;
+}
+
 void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
-	bool draw_border = (border_width[0] > 0) || (border_width[1] > 0) || (border_width[2] > 0) || (border_width[3] > 0);
-	bool draw_shadow = (shadow_size > 0);
+	// Sets up the draw-time animation state (enter/exit transitions, transforms).
+	begin_draw(p_canvas_item, p_rect);
+
+	Rect2 rect_animated = get_animated_value(SNAME("rect"), p_rect);
+
+	Color bg_color_animated = get_animated_value(SNAME("bg_color"), bg_color);
+	Color border_color_animated = get_animated_value(SNAME("border/color"), border_color);
+
+	real_t expand_margin_animated[4] = {
+		get_animated_value(SNAME("expand/margin_left"), expand_margin[SIDE_LEFT]),
+		get_animated_value(SNAME("expand/margin_top"), expand_margin[SIDE_TOP]),
+		get_animated_value(SNAME("expand/margin_right"), expand_margin[SIDE_RIGHT]),
+		get_animated_value(SNAME("expand/margin_bottom"), expand_margin[SIDE_BOTTOM])
+	};
+
+	real_t border_width_animated[4] = {
+		get_animated_value(SNAME("border/width_left"), border_width[SIDE_LEFT]),
+		get_animated_value(SNAME("border/width_top"), border_width[SIDE_TOP]),
+		get_animated_value(SNAME("border/width_right"), border_width[SIDE_RIGHT]),
+		get_animated_value(SNAME("border/width_bottom"), border_width[SIDE_BOTTOM])
+	};
+	for (int i = 0; i < 4; i++) {
+		border_width_animated[i] = MAX(0, border_width_animated[i]);
+	}
+
+	real_t corner_radius_animated[4];
+	corner_radius_animated[0] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/top_left"), corner_radius[CORNER_TOP_LEFT]));
+	corner_radius_animated[1] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/top_right"), corner_radius[CORNER_TOP_RIGHT]));
+	corner_radius_animated[2] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/bottom_right"), corner_radius[CORNER_BOTTOM_RIGHT]));
+	corner_radius_animated[3] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/bottom_left"), corner_radius[CORNER_BOTTOM_LEFT]));
+
+	real_t shadow_size_animated = get_animated_value(SNAME("shadow/size"), shadow_size);
+	Vector2 shadow_offset_animated = get_animated_value(SNAME("shadow/offset"), shadow_offset);
+	Color shadow_color_animated = get_animated_value(SNAME("shadow/color"), shadow_color);
+
+	Color bevel_lighting_color_animated = get_animated_value(SNAME("bevel/lighting_color"), bevel_lighting_color);
+	Color bevel_darkening_color_animated = get_animated_value(SNAME("bevel/darkening_color"), bevel_darkening_color);
+	real_t bevel_lighting_intensity_animated = get_animated_value(SNAME("bevel/lighting_intensity"), bevel_lighting_intensity);
+	real_t bevel_darkening_intensity_animated = get_animated_value(SNAME("bevel/darkening_intensity"), bevel_darkening_intensity);
+	real_t bevel_lighting_angle_animated = get_animated_value(SNAME("bevel/lighting_angle"), bevel_lighting_angle);
+	real_t bevel_max_intensity_angle_ratio_animated = get_animated_value(SNAME("bevel/max_intensity_angle_ratio"), bevel_max_intensity_angle_ratio);
+	real_t bevel_style_animated = get_animated_value(SNAME("bevel/style"), bevel_style);
+
+	bool draw_border = (border_width_animated[0] > 0) || (border_width_animated[1] > 0) || (border_width_animated[2] > 0) || (border_width_animated[3] > 0);
+	bool draw_shadow = (shadow_size_animated > 0);
 	if (!draw_border && !draw_center && !draw_shadow) {
 		return;
 	}
 
-	Rect2 style_rect = p_rect.grow_individual(expand_margin[SIDE_LEFT], expand_margin[SIDE_TOP], expand_margin[SIDE_RIGHT], expand_margin[SIDE_BOTTOM]);
+	Rect2 style_rect = rect_animated.grow_individual(expand_margin_animated[SIDE_LEFT], expand_margin_animated[SIDE_TOP], expand_margin_animated[SIDE_RIGHT], expand_margin_animated[SIDE_BOTTOM]);
 	if (Math::is_zero_approx(style_rect.size.width) || Math::is_zero_approx(style_rect.size.height)) {
 		return;
 	}
 
-	const bool rounded_corners = (corner_radius[0] > 0) || (corner_radius[1] > 0) || (corner_radius[2] > 0) || (corner_radius[3] > 0);
+	const bool rounded_corners = (corner_radius_animated[0] > 0) || (corner_radius_animated[1] > 0) || (corner_radius_animated[2] > 0) || (corner_radius_animated[3] > 0);
 	// Only enable antialiasing if it is actually needed. This improves performance
 	// and maximizes sharpness for non-skewed StyleBoxes with sharp corners.
 	const bool aa_on = (rounded_corners || !skew.is_zero_approx()) && anti_aliased;
 
 	const bool blend_on = blend_border && draw_border;
 
-	const Color &base_color = border_color;
+	const Color &base_color = border_color_animated;
 
 	// Compute the color of each side, based on the lighting angle.
-	Color light_blend = base_color.lerp(bevel_lighting_color, bevel_lighting_intensity);
-	Color dark_blend = base_color.lerp(bevel_darkening_color, bevel_darkening_intensity);
+	Color light_blend = base_color.lerp(bevel_lighting_color_animated, bevel_lighting_intensity_animated);
+	Color dark_blend = base_color.lerp(bevel_darkening_color_animated, bevel_darkening_intensity_animated);
 	Color side_colors[4];
 	for (int i = 0; i < 4; i++) {
-		real_t ref_angle = Math::fposmod(((4 + 2 - i) % 4) * 90.0 - bevel_lighting_angle, 360.0);
+		real_t ref_angle = Math::fposmod(((4 + 2 - i) % 4) * 90.0 - bevel_lighting_angle_animated, 360.0);
 		real_t linear_exposure = (ref_angle <= 180.0) ? (-(ref_angle / 90.0) + 1.0) : ((ref_angle / 90.0) - 3.0);
-		real_t ratio_to_remap = 1.0 - bevel_max_intensity_angle_ratio;
+		real_t ratio_to_remap = 1.0 - bevel_max_intensity_angle_ratio_animated;
 		real_t ref_exposure = (ratio_to_remap <= 0.0001) ? CLAMP(linear_exposure, (real_t)-1.0, (real_t)1.0) : CLAMP(Math::remap(linear_exposure, -ratio_to_remap, ratio_to_remap, (real_t)-1.0, (real_t)1.0), (real_t)-1.0, (real_t)1.0);
 		side_colors[i] = (ref_exposure >= 0.0) ? base_color.lerp(light_blend, ref_exposure) : base_color.lerp(dark_blend, -ref_exposure);
 	}
 
 	// Outset bevels map the side colors directly to their sides (LEFT=0-1, TOP=2-3,
 	// RIGHT=4-5, BOTTOM=6-7). Inset bevels rotate the mapping by half a turn, so each
-	// side is shaded by the opposing exitant angle.
-	int start_i = (bevel_style == BEVEL_STYLE_INSET) ? 4 : 0;
+	// side is shaded by the opposing exitant angle. bevel_style is a float in [-1, 1]:
+	// 1 = fully outset, -1 = fully inset, values in between blend continuously between
+	// the two mappings.
+	const real_t start_pos = (1.0 - bevel_style_animated) * 2.0; // 0 (outset) .. 4 (inset)
 	Color border_colors[8];
 	Color border_alpha_colors[8];
 	Color border_blend_colors[8];
@@ -372,11 +512,17 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Color bg_colors[8];
 	for (int i = 0; i < 8; i++) {
 		border_colors[i] = Color(0, 0, 0, 1);
-		bg_colors[i] = bg_color;
+		bg_colors[i] = bg_color_animated;
 	}
-	for (int i = 0; i < 4; i++) {
-		border_colors[(start_i + i * 2) % 8] = side_colors[i];
-		border_colors[(start_i + i * 2 + 1) % 8] = side_colors[i];
+	for (int i = 0; i < 8; i++) {
+		// Rotate slot -> side mapping by start_pos and interpolate between the two
+		// adjacent sides for smooth, continuous bevel_style transitions.
+		const real_t shifted = (real_t)i - start_pos;
+		const real_t floored = Math::floor(shifted);
+		const int slot0 = (int)Math::fposmod(floored, 8.0f);
+		const int slot1 = (int)Math::fposmod(floored + 1.0f, 8.0f);
+		const real_t t = shifted - floored;
+		border_colors[i] = side_colors[slot0 >> 1].lerp(side_colors[slot1 >> 1], t);
 	}
 	for (int i = 0; i < 8; i++) {
 		border_alpha_colors[i] = Color(border_colors[i].r, border_colors[i].g, border_colors[i].b, 0);
@@ -404,15 +550,15 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	real_t height = MAX(style_rect.size.height - aa_shrink, 0);
 	real_t adapted_border[4] = { 1000000.0, 1000000.0, 1000000.0, 1000000.0 };
 	{
-		real_t value_a = border_width[SIDE_TOP];
-		real_t value_b = border_width[SIDE_BOTTOM];
+		real_t value_a = border_width_animated[SIDE_TOP];
+		real_t value_b = border_width_animated[SIDE_BOTTOM];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, height / (value_a + value_b));
 		adapted_border[SIDE_TOP] = MIN(MIN(value_a * factor, height), adapted_border[SIDE_TOP]);
 		adapted_border[SIDE_BOTTOM] = MIN(MIN(value_b * factor, height), adapted_border[SIDE_BOTTOM]);
 	}
 	{
-		real_t value_a = border_width[SIDE_LEFT];
-		real_t value_b = border_width[SIDE_RIGHT];
+		real_t value_a = border_width_animated[SIDE_LEFT];
+		real_t value_b = border_width_animated[SIDE_RIGHT];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, width / (value_a + value_b));
 		adapted_border[SIDE_LEFT] = MIN(MIN(value_a * factor, width), adapted_border[SIDE_LEFT]);
 		adapted_border[SIDE_RIGHT] = MIN(MIN(value_b * factor, width), adapted_border[SIDE_RIGHT]);
@@ -421,29 +567,29 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	// Adapt corners (prevent weird overlapping/glitchy drawings).
 	real_t adapted_corner[4] = { 1000000.0, 1000000.0, 1000000.0, 1000000.0 };
 	{
-		real_t value_a = corner_radius[CORNER_TOP_RIGHT];
-		real_t value_b = corner_radius[CORNER_BOTTOM_RIGHT];
+		real_t value_a = corner_radius_animated[CORNER_TOP_RIGHT];
+		real_t value_b = corner_radius_animated[CORNER_BOTTOM_RIGHT];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, height / (value_a + value_b));
 		adapted_corner[CORNER_TOP_RIGHT] = MIN(MIN(value_a * factor, height - adapted_border[SIDE_BOTTOM]), adapted_corner[CORNER_TOP_RIGHT]);
 		adapted_corner[CORNER_BOTTOM_RIGHT] = MIN(MIN(value_b * factor, height - adapted_border[SIDE_TOP]), adapted_corner[CORNER_BOTTOM_RIGHT]);
 	}
 	{
-		real_t value_a = corner_radius[CORNER_TOP_LEFT];
-		real_t value_b = corner_radius[CORNER_BOTTOM_LEFT];
+		real_t value_a = corner_radius_animated[CORNER_TOP_LEFT];
+		real_t value_b = corner_radius_animated[CORNER_BOTTOM_LEFT];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, height / (value_a + value_b));
 		adapted_corner[CORNER_TOP_LEFT] = MIN(MIN(value_a * factor, height - adapted_border[SIDE_BOTTOM]), adapted_corner[CORNER_TOP_LEFT]);
 		adapted_corner[CORNER_BOTTOM_LEFT] = MIN(MIN(value_b * factor, height - adapted_border[SIDE_TOP]), adapted_corner[CORNER_BOTTOM_LEFT]);
 	}
 	{
-		real_t value_a = corner_radius[CORNER_TOP_LEFT];
-		real_t value_b = corner_radius[CORNER_TOP_RIGHT];
+		real_t value_a = corner_radius_animated[CORNER_TOP_LEFT];
+		real_t value_b = corner_radius_animated[CORNER_TOP_RIGHT];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, width / (value_a + value_b));
 		adapted_corner[CORNER_TOP_LEFT] = MIN(MIN(value_a * factor, width - adapted_border[SIDE_RIGHT]), adapted_corner[CORNER_TOP_LEFT]);
 		adapted_corner[CORNER_TOP_RIGHT] = MIN(MIN(value_b * factor, width - adapted_border[SIDE_LEFT]), adapted_corner[CORNER_TOP_RIGHT]);
 	}
 	{
-		real_t value_a = corner_radius[CORNER_BOTTOM_LEFT];
-		real_t value_b = corner_radius[CORNER_BOTTOM_RIGHT];
+		real_t value_a = corner_radius_animated[CORNER_BOTTOM_LEFT];
+		real_t value_b = corner_radius_animated[CORNER_BOTTOM_RIGHT];
 		real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, width / (value_a + value_b));
 		adapted_corner[CORNER_BOTTOM_LEFT] = MIN(MIN(value_a * factor, width - adapted_border[SIDE_RIGHT]), adapted_corner[CORNER_BOTTOM_LEFT]);
 		adapted_corner[CORNER_BOTTOM_RIGHT] = MIN(MIN(value_b * factor, width - adapted_border[SIDE_LEFT]), adapted_corner[CORNER_BOTTOM_RIGHT]);
@@ -455,7 +601,7 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	if (aa_on) {
 		for (int i = 0; i < 4; i++) {
-			if (border_width[i] > 0) {
+			if (border_width_animated[i] > 0) {
 				border_style_rect = border_style_rect.grow_side((Side)i, -aa_size_scaled);
 			}
 		}
@@ -478,15 +624,15 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	// Create shadow.
 	if (draw_shadow) {
 		Rect2 shadow_inner_rect = style_rect;
-		shadow_inner_rect.position += shadow_offset;
+		shadow_inner_rect.position += shadow_offset_animated;
 
-		Rect2 shadow_rect = style_rect.grow(shadow_size);
-		shadow_rect.position += shadow_offset;
+		Rect2 shadow_rect = style_rect.grow(shadow_size_animated);
+		shadow_rect.position += shadow_offset_animated;
 
-		Color shadow_color_transparent = Color(shadow_color.r, shadow_color.g, shadow_color.b, 0);
+		Color shadow_color_transparent = Color(shadow_color_animated.r, shadow_color_animated.g, shadow_color_animated.b, 0);
 		Color shadow_colors[8] = {
-			shadow_color, shadow_color, shadow_color, shadow_color,
-			shadow_color, shadow_color, shadow_color, shadow_color
+			shadow_color_animated, shadow_color_animated, shadow_color_animated, shadow_color_animated,
+			shadow_color_animated, shadow_color_animated, shadow_color_animated, shadow_color_animated
 		};
 		Color shadow_alpha_colors[8] = {
 			shadow_color_transparent, shadow_color_transparent, shadow_color_transparent, shadow_color_transparent,
@@ -504,8 +650,13 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	// Create border (no AA).
 	if (draw_border && !aa_on) {
-		bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-				border_style_rect, infill_rect, border_inner_colors, border_colors, corner_detail, skew);
+		if (blend_on) {
+			bevel_draw_blend_bands(verts, border_indices, colors, border_style_rect, adapted_corner,
+					border_style_rect, infill_rect, border_colors, border_blend_colors, bevel_blend_function, bevel_blend_curve, corner_detail, skew);
+		} else {
+			bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
+					border_style_rect, infill_rect, border_inner_colors, border_colors, corner_detail, skew);
+		}
 	}
 
 	// Create infill (no AA).
@@ -522,7 +673,7 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 		if (draw_border) {
 			for (int i = 0; i < 4; i++) {
-				if (border_width[i] > 0) {
+				if (border_width_animated[i] > 0) {
 					aa_border_width[i] = aa_size_scaled;
 					aa_border_width_half[i] = aa_size_scaled * 0.5;
 					aa_fill_width[i] = 0;
@@ -556,7 +707,7 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 						infill_rect_aa_colored, infill_rect_aa_colored, bg_colors, bg_colors, corner_detail, skew, true);
 			}
 			if (!blend_on || !draw_border) {
-				Color alpha_bg = Color(bg_color.r, bg_color.g, bg_color.b, 0);
+				Color alpha_bg = Color(bg_color_animated.r, bg_color_animated.g, bg_color_animated.b, 0);
 				Color bg_alpha_colors[8] = {
 					alpha_bg, alpha_bg, alpha_bg, alpha_bg,
 					alpha_bg, alpha_bg, alpha_bg, alpha_bg
@@ -581,9 +732,16 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			Rect2 outer_rect_aa_colored = border_style_rect.grow_individual(aa_border_width_half[SIDE_LEFT], aa_border_width_half[SIDE_TOP],
 					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
 
-			// Create border ring, not antialiased yet
-			bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-					outer_rect_aa_colored, ((blend_on) ? infill_rect : inner_rect_aa_colored), border_inner_colors, border_colors, corner_detail, skew);
+			if (blend_on) {
+				// Draw the border ring, not antialiased yet. The blend curve is
+				// applied across the ring width as concentric sub-bands.
+				bevel_draw_blend_bands(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_colored, infill_rect, border_colors, border_blend_colors, bevel_blend_function, bevel_blend_curve, corner_detail, skew);
+			} else {
+				// Create border ring, not antialiased yet
+				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_colored, inner_rect_aa_colored, border_inner_colors, border_colors, corner_detail, skew);
+			}
 			if (!blend_on) {
 				// Add antialiasing on the ring inner border
 				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
@@ -619,13 +777,13 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	} else {
 		vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
 	}
+
+	end_draw(p_canvas_item, p_rect);
 }
 
 void StyleBoxBevel::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bevel_style", "style"), &StyleBoxBevel::set_bevel_style);
 	ClassDB::bind_method(D_METHOD("get_bevel_style"), &StyleBoxBevel::get_bevel_style);
-	BIND_ENUM_CONSTANT(BEVEL_STYLE_OUTSET);
-	BIND_ENUM_CONSTANT(BEVEL_STYLE_INSET);
 
 	ClassDB::bind_method(D_METHOD("set_bevel_lighting_color", "color"), &StyleBoxBevel::set_bevel_lighting_color);
 	ClassDB::bind_method(D_METHOD("get_bevel_lighting_color"), &StyleBoxBevel::get_bevel_lighting_color);
@@ -645,12 +803,26 @@ void StyleBoxBevel::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bevel_max_intensity_angle_ratio", "ratio"), &StyleBoxBevel::set_bevel_max_intensity_angle_ratio);
 	ClassDB::bind_method(D_METHOD("get_bevel_max_intensity_angle_ratio"), &StyleBoxBevel::get_bevel_max_intensity_angle_ratio);
 
+	ClassDB::bind_method(D_METHOD("set_bevel_blend_function", "function"), &StyleBoxBevel::set_bevel_blend_function);
+	ClassDB::bind_method(D_METHOD("get_bevel_blend_function"), &StyleBoxBevel::get_bevel_blend_function);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_LINEAR);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_SMOOTHSTEP);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_EASE_IN);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_EASE_OUT);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_EASE_IN_OUT);
+	BIND_ENUM_CONSTANT(BEVEL_BLEND_CURVE);
+
+	ClassDB::bind_method(D_METHOD("set_bevel_blend_curve", "curve"), &StyleBoxBevel::set_bevel_blend_curve);
+	ClassDB::bind_method(D_METHOD("get_bevel_blend_curve"), &StyleBoxBevel::get_bevel_blend_curve);
+
 	ADD_GROUP("Bevel", "bevel_");
-	ADD_PROPERTY(PropertyInfo(Variant::INT, "bevel_style", PROPERTY_HINT_ENUM, "Outset,Inset"), "set_bevel_style", "get_bevel_style");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_style", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_bevel_style", "get_bevel_style");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "bevel_lighting_color"), "set_bevel_lighting_color", "get_bevel_lighting_color");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "bevel_darkening_color"), "set_bevel_darkening_color", "get_bevel_darkening_color");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_lighting_intensity", PROPERTY_HINT_RANGE, "0,4,0.01"), "set_bevel_lighting_intensity", "get_bevel_lighting_intensity");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_darkening_intensity", PROPERTY_HINT_RANGE, "0,4,0.01"), "set_bevel_darkening_intensity", "get_bevel_darkening_intensity");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_lighting_angle", PROPERTY_HINT_RANGE, "0,360,0.1,slider,degrees"), "set_bevel_lighting_angle", "get_bevel_lighting_angle");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_max_intensity_angle_ratio", PROPERTY_HINT_RANGE, "0.05,1,0.01"), "set_bevel_max_intensity_angle_ratio", "get_bevel_max_intensity_angle_ratio");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "bevel_blend_function", PROPERTY_HINT_ENUM, "Linear,Smoothstep,Ease In,Ease Out,Ease In Out,Curve"), "set_bevel_blend_function", "get_bevel_blend_function");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "bevel_blend_curve", PROPERTY_HINT_RESOURCE_TYPE, "Curve"), "set_bevel_blend_curve", "get_bevel_blend_curve");
 }

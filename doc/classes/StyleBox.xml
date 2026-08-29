@@ -151,8 +151,11 @@
 		<member name="animation_animate_rect" type="bool" setter="set_animating_rect" getter="is_animating_rect" default="true">
 			Whether or not to animate changes in draw rects.
 		</member>
-		<member name="animation_duration" type="float" setter="set_animation_duration" getter="get_animation_duration" default="0.0">
-			The duration in seconds of transition animations.
+		<member name="animation_duration_in" type="float" setter="set_animation_duration" getter="get_animation_duration" default="0.0">
+			The duration in seconds of the "in" phase of transition animations. When a stylebox is swapped out for another, the total transition time is the previous box's [member animation_duration_out] plus this box's [member animation_duration_in].
+		</member>
+		<member name="animation_duration_out" type="float" setter="set_animation_duration" getter="get_animation_duration" default="0.0">
+			The duration in seconds of the "out" phase of transition animations. When this stylebox is swapped out for another, its [member animation_duration_out] is added to the incoming box's [member animation_duration_in] to form the total transition time.
 		</member>
 		<member name="animation_ease" type="int" setter="set_animation_ease" getter="get_animation_ease" enum="Tween.EaseType" default="1">
 			The ease of transition animations.

@@ -30,32 +30,40 @@
 
 #pragma once
 
+#include "scene/resources/curve.h"
 #include "scene/resources/style_box_flat.h"
 
 class StyleBoxBevel : public StyleBoxFlat {
 	GDCLASS(StyleBoxBevel, StyleBoxFlat);
 
 public:
-	enum BevelStyle {
-		BEVEL_STYLE_OUTSET,
-		BEVEL_STYLE_INSET,
+	enum BevelBlendFunction {
+		BEVEL_BLEND_LINEAR,
+		BEVEL_BLEND_SMOOTHSTEP,
+		BEVEL_BLEND_EASE_IN,
+		BEVEL_BLEND_EASE_OUT,
+		BEVEL_BLEND_EASE_IN_OUT,
+		BEVEL_BLEND_CURVE,
 	};
 
 private:
-	BevelStyle bevel_style = BEVEL_STYLE_OUTSET;
+	// 1.0 = fully outset, -1.0 = fully inset; values in between blend between the two.
+	real_t bevel_style = 1.0;
 	Color bevel_lighting_color = Color(1, 1, 1);
 	Color bevel_darkening_color = Color(0, 0, 0);
 	real_t bevel_lighting_intensity = 0.3;
 	real_t bevel_darkening_intensity = 0.3;
 	real_t bevel_lighting_angle = 135.0;
 	real_t bevel_max_intensity_angle_ratio = 0.5;
+	BevelBlendFunction bevel_blend_function = BEVEL_BLEND_LINEAR;
+	Ref<Curve> bevel_blend_curve;
 
 protected:
 	static void _bind_methods();
 
 public:
-	void set_bevel_style(BevelStyle p_style);
-	BevelStyle get_bevel_style() const;
+	void set_bevel_style(float p_style);
+	float get_bevel_style() const;
 
 	void set_bevel_lighting_color(const Color &p_color);
 	Color get_bevel_lighting_color() const;
@@ -75,7 +83,13 @@ public:
 	void set_bevel_max_intensity_angle_ratio(float p_ratio);
 	float get_bevel_max_intensity_angle_ratio() const;
 
+	void set_bevel_blend_function(BevelBlendFunction p_function);
+	BevelBlendFunction get_bevel_blend_function() const;
+
+	void set_bevel_blend_curve(Ref<Curve> p_curve);
+	Ref<Curve> get_bevel_blend_curve() const;
+
 	virtual void draw(RID p_canvas_item, const Rect2 &p_rect) const override;
 };
 
-VARIANT_ENUM_CAST(StyleBoxBevel::BevelStyle)
+VARIANT_ENUM_CAST(StyleBoxBevel::BevelBlendFunction)
