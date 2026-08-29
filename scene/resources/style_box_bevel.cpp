@@ -511,6 +511,8 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Color border_alpha_colors[8];
 	Color border_blend_colors[8];
 	Color border_inner_colors[8];
+	Color border_aa_outer_colors[8];
+	Color border_aa_alpha_colors[8];
 	Color bg_colors[8];
 	for (int i = 0; i < 8; i++) {
 		border_colors[i] = Color(0, 0, 0, 1);
@@ -716,6 +718,23 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 
 		if (draw_border) {
+			if (blend_on) {
+				// The border blends toward the background across its width. Sample the
+				// actual color at the border's outer boundary so the outer AA feather
+				// fades from the real edge color (which may already be fully blended
+				// toward the background) instead of the unblended bevel color.
+				const real_t blend_outer = bevel_blend_factor(bevel_blend_function, bevel_blend_curve, 0.0);
+				for (int i = 0; i < 8; i++) {
+					border_aa_outer_colors[i] = border_colors[i].lerp(border_blend_colors[i], blend_outer);
+					border_aa_alpha_colors[i] = Color(border_aa_outer_colors[i].r, border_aa_outer_colors[i].g, border_aa_outer_colors[i].b, 0);
+				}
+			} else {
+				for (int i = 0; i < 8; i++) {
+					border_aa_outer_colors[i] = border_colors[i];
+					border_aa_alpha_colors[i] = border_alpha_colors[i];
+				}
+			}
+
 			// Inner border recct, fully colored side of antialiasing gradient (base inner rect enlarged by AA size)
 			Rect2 inner_rect_aa_colored = infill_rect.grow_individual(aa_border_width_half[SIDE_LEFT], aa_border_width_half[SIDE_TOP],
 					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
@@ -746,7 +765,7 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			}
 			// Add antialiasing on the ring outer border
 			bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-					outer_rect_aa_transparent, outer_rect_aa_colored, border_colors, border_alpha_colors, corner_detail, skew);
+					outer_rect_aa_transparent, outer_rect_aa_colored, border_aa_outer_colors, border_aa_alpha_colors, corner_detail, skew);
 		}
 	}
 
