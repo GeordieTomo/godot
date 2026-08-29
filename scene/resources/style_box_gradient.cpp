@@ -1,0 +1,1293 @@
+/**************************************************************************/
+/*  style_box_gradient.cpp                                                */
+/**************************************************************************/
+/*                         This file is part of:                          */
+/*                             GODOT ENGINE                               */
+/*                        https://godotengine.org                         */
+/**************************************************************************/
+/* Copyright (c) 2014-present Godot Engine contributors (see AUTHORS.md). */
+/* Copyright (c) 2007-2014 Juan Linietsky, Ariel Manzur.                  */
+/*                                                                        */
+/* Permission is hereby granted, free of charge, to any person obtaining  */
+/* a copy of this software and associated documentation files (the        */
+/* "Software"), to deal in the Software without restriction, including    */
+/* without limitation the rights to use, copy, modify, merge, publish,    */
+/* distribute, sublicense, and/or sell copies of the Software, and to     */
+/* permit persons to whom the Software is furnished to do so, subject to  */
+/* the following conditions:                                              */
+/*                                                                        */
+/* The above copyright notice and this permission notice shall be         */
+/* included in all copies or substantial portions of the Software.        */
+/*                                                                        */
+/* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,        */
+/* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF     */
+/* MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. */
+/* IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY   */
+/* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,   */
+/* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE      */
+/* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
+/**************************************************************************/
+
+#include "style_box_gradient.h"
+
+#include "core/config/engine.h"
+#include "core/object/callable_mp.h"
+#include "core/object/class_db.h"
+#include "scene/resources/texture.h"
+#include "servers/rendering/rendering_server.h"
+#include "servers/text/text_server.h"
+
+#include <cfloat> // FLT_EPSILON
+
+float StyleBoxGradient::get_style_margin(Side p_side) const {
+	ERR_FAIL_INDEX_V((int)p_side, 4, 0.0);
+	return border_width[p_side];
+}
+
+void StyleBoxGradient::_validate_property(PropertyInfo &p_property) const {
+	if (!Engine::get_singleton()->is_editor_hint()) {
+		return;
+	}
+	if (!anti_aliased && p_property.name == "anti_aliasing_size") {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+	// The single border texture of the base class is replaced by the per-side
+	// border textures exposed here.
+	if (p_property.name == "border_texture") {
+		p_property.usage = PROPERTY_USAGE_NO_EDITOR;
+	}
+}
+
+void StyleBoxGradient::set_bg_color(const Color &p_color) {
+	bg_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxGradient::get_bg_color() const {
+	return bg_color;
+}
+
+void StyleBoxGradient::set_modulate(const Color &p_color) {
+	modulate = p_color;
+	emit_changed();
+}
+
+Color StyleBoxGradient::get_modulate() const {
+	return modulate;
+}
+
+void StyleBoxGradient::set_border_color(const Color &p_color) {
+	border_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxGradient::get_border_color() const {
+	return border_color;
+}
+
+void StyleBoxGradient::set_border_width_all(int p_size) {
+	border_width[0] = p_size;
+	border_width[1] = p_size;
+	border_width[2] = p_size;
+	border_width[3] = p_size;
+	emit_changed();
+}
+
+int StyleBoxGradient::get_border_width_min() const {
+	return MIN(MIN(border_width[0], border_width[1]), MIN(border_width[2], border_width[3]));
+}
+
+void StyleBoxGradient::set_border_width(Side p_side, int p_width) {
+	ERR_FAIL_INDEX((int)p_side, 4);
+	border_width[p_side] = p_width;
+	emit_changed();
+}
+
+int StyleBoxGradient::get_border_width(Side p_side) const {
+	ERR_FAIL_INDEX_V((int)p_side, 4, 0);
+	return border_width[p_side];
+}
+
+void StyleBoxGradient::set_border_blend(bool p_blend) {
+	blend_border = p_blend;
+	emit_changed();
+}
+
+bool StyleBoxGradient::get_border_blend() const {
+	return blend_border;
+}
+
+void StyleBoxGradient::set_corner_radius(const Corner p_corner, const int radius) {
+	ERR_FAIL_INDEX((int)p_corner, 4);
+	corner_radius[p_corner] = radius;
+	emit_changed();
+}
+
+void StyleBoxGradient::set_corner_radius_all(int radius) {
+	for (int i = 0; i < 4; i++) {
+		corner_radius[i] = radius;
+	}
+
+	emit_changed();
+}
+
+void StyleBoxGradient::set_corner_radius_individual(const int radius_top_left, const int radius_top_right, const int radius_bottom_right, const int radius_bottom_left) {
+	corner_radius[0] = radius_top_left;
+	corner_radius[1] = radius_top_right;
+	corner_radius[2] = radius_bottom_right;
+	corner_radius[3] = radius_bottom_left;
+
+	emit_changed();
+}
+
+int StyleBoxGradient::get_corner_radius(const Corner p_corner) const {
+	ERR_FAIL_INDEX_V((int)p_corner, 4, 0);
+	return corner_radius[p_corner];
+}
+
+void StyleBoxGradient::set_corner_detail(const int &p_corner_detail) {
+	corner_detail = CLAMP(p_corner_detail, 1, 20);
+	emit_changed();
+}
+
+int StyleBoxGradient::get_corner_detail() const {
+	return corner_detail;
+}
+
+void StyleBoxGradient::set_expand_margin(Side p_side, float p_size) {
+	ERR_FAIL_INDEX((int)p_side, 4);
+	expand_margin[p_side] = p_size;
+	emit_changed();
+}
+
+void StyleBoxGradient::set_expand_margin_all(float p_expand_margin_size) {
+	for (int i = 0; i < 4; i++) {
+		expand_margin[i] = p_expand_margin_size;
+	}
+	emit_changed();
+}
+
+void StyleBoxGradient::set_expand_margin_individual(float p_left, float p_top, float p_right, float p_bottom) {
+	expand_margin[SIDE_LEFT] = p_left;
+	expand_margin[SIDE_TOP] = p_top;
+	expand_margin[SIDE_RIGHT] = p_right;
+	expand_margin[SIDE_BOTTOM] = p_bottom;
+	emit_changed();
+}
+
+float StyleBoxGradient::get_expand_margin(Side p_side) const {
+	ERR_FAIL_INDEX_V((int)p_side, 4, 0.0);
+	return expand_margin[p_side];
+}
+
+void StyleBoxGradient::set_draw_center(bool p_enabled) {
+	draw_center = p_enabled;
+	emit_changed();
+}
+
+bool StyleBoxGradient::is_draw_center_enabled() const {
+	return draw_center;
+}
+
+void StyleBoxGradient::set_skew(Vector2 p_skew) {
+	skew = p_skew;
+	emit_changed();
+}
+
+Vector2 StyleBoxGradient::get_skew() const {
+	return skew;
+}
+
+void StyleBoxGradient::set_shadow_color(const Color &p_color) {
+	shadow_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxGradient::get_shadow_color() const {
+	return shadow_color;
+}
+
+void StyleBoxGradient::set_shadow_size(const int &p_size) {
+	shadow_size = p_size;
+	emit_changed();
+}
+
+int StyleBoxGradient::get_shadow_size() const {
+	return shadow_size;
+}
+
+void StyleBoxGradient::set_shadow_offset(const Point2 &p_offset) {
+	shadow_offset = p_offset;
+	emit_changed();
+}
+
+Point2 StyleBoxGradient::get_shadow_offset() const {
+	return shadow_offset;
+}
+
+void StyleBoxGradient::set_inset_shadow_color(const Color &p_color) {
+	inset_shadow_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxGradient::get_inset_shadow_color() const {
+	return inset_shadow_color;
+}
+
+void StyleBoxGradient::set_inset_shadow_size(const int &p_size) {
+	inset_shadow_size = p_size;
+	emit_changed();
+}
+
+int StyleBoxGradient::get_inset_shadow_size() const {
+	return inset_shadow_size;
+}
+
+void StyleBoxGradient::set_inset_shadow_offset(const Point2 &p_offset) {
+	inset_shadow_offset = p_offset;
+	emit_changed();
+}
+
+Point2 StyleBoxGradient::get_inset_shadow_offset() const {
+	return inset_shadow_offset;
+}
+
+void StyleBoxGradient::_set_texture(Ref<Texture2D> *p_destination, const Ref<Texture2D> &p_texture) {
+	DEV_ASSERT(p_destination);
+	Ref<Texture2D> &destination = *p_destination;
+	if (destination == p_texture) {
+		return;
+	}
+	if (destination.is_valid()) {
+		destination->disconnect_changed(callable_mp(this, &StyleBoxGradient::_texture_changed));
+	}
+	destination = p_texture;
+	if (destination.is_valid()) {
+		// Pass `CONNECT_REFERENCE_COUNTED` to avoid early disconnect in case the same texture is assigned to different "slots".
+		destination->connect_changed(callable_mp(this, &StyleBoxGradient::_texture_changed), CONNECT_REFERENCE_COUNTED);
+	}
+	_texture_changed();
+}
+
+void StyleBoxGradient::_texture_changed() {
+	bg_texture_image.unref();
+	emit_changed();
+}
+
+void StyleBoxGradient::set_bg_texture(Ref<Texture2D> p_texture) {
+	_set_texture(&bg_texture, p_texture);
+}
+
+Ref<Texture2D> StyleBoxGradient::get_bg_texture() const {
+	return bg_texture;
+}
+
+void StyleBoxGradient::set_side_border_texture(Side p_side, Ref<Texture2D> p_texture) {
+	ERR_FAIL_INDEX((int)p_side, 4);
+	_set_texture(&border_textures[p_side], p_texture);
+}
+
+Ref<Texture2D> StyleBoxGradient::get_side_border_texture(Side p_side) const {
+	ERR_FAIL_INDEX_V((int)p_side, 4, Ref<Texture2D>());
+	return border_textures[p_side];
+}
+
+void StyleBoxGradient::set_shadow_texture(Ref<Texture2D> p_texture) {
+	_set_texture(&shadow_texture, p_texture);
+}
+
+Ref<Texture2D> StyleBoxGradient::get_shadow_texture() const {
+	return shadow_texture;
+}
+
+void StyleBoxGradient::set_anti_aliased(const bool &p_anti_aliased) {
+	anti_aliased = p_anti_aliased;
+	emit_changed();
+	notify_property_list_changed();
+}
+
+bool StyleBoxGradient::is_anti_aliased() const {
+	return anti_aliased;
+}
+
+void StyleBoxGradient::set_aa_size(const real_t p_aa_size) {
+	aa_size = CLAMP(p_aa_size, 0.01, 10);
+	emit_changed();
+}
+
+real_t StyleBoxGradient::get_aa_size() const {
+	return aa_size;
+}
+
+inline void set_inner_corner_radius(const Rect2 style_rect, const Rect2 inner_rect, const real_t corner_radius[4], real_t *inner_corner_radius) {
+	real_t border_left = inner_rect.position.x - style_rect.position.x;
+	real_t border_top = inner_rect.position.y - style_rect.position.y;
+	real_t border_right = style_rect.size.width - inner_rect.size.width - border_left;
+	real_t border_bottom = style_rect.size.height - inner_rect.size.height - border_top;
+
+	inner_corner_radius[0] = MAX(corner_radius[0] - MIN(border_top, border_left), 0); // Top left.
+	inner_corner_radius[1] = MAX(corner_radius[1] - MIN(border_top, border_right), 0); // Top right.
+	inner_corner_radius[2] = MAX(corner_radius[2] - MIN(border_bottom, border_right), 0); // Bottom right.
+	inner_corner_radius[3] = MAX(corner_radius[3] - MIN(border_bottom, border_left), 0); // Bottom left.
+}
+
+inline void set_corner_scale(const Rect2 &style_rect, const Rect2 &inner_rect, const real_t corner_radius[4], Point2 *inner_scale) {
+	real_t border_left = inner_rect.position.x - style_rect.position.x;
+	real_t border_top = inner_rect.position.y - style_rect.position.y;
+	real_t border_right = style_rect.size.width - inner_rect.size.width - border_left;
+	real_t border_bottom = style_rect.size.height - inner_rect.size.height - border_top;
+
+	// Amount of overflow along an edge.
+	// Ex. SIDE_LEFT edge is the overflow between top_left and bottom_left corners.
+	// MIN(0,) is to ignore underflow, and negating is to make values positive.
+	real_t edge_overflow[4] = {
+		-MIN(0, inner_rect.size.y - corner_radius[CORNER_TOP_LEFT] - corner_radius[CORNER_BOTTOM_LEFT]),
+		-MIN(0, inner_rect.size.x - corner_radius[CORNER_TOP_LEFT] - corner_radius[CORNER_TOP_RIGHT]),
+		-MIN(0, inner_rect.size.y - corner_radius[CORNER_TOP_RIGHT] - corner_radius[CORNER_BOTTOM_RIGHT]),
+		-MIN(0, inner_rect.size.x - corner_radius[CORNER_BOTTOM_LEFT] - corner_radius[CORNER_BOTTOM_RIGHT])
+	};
+
+	// Sums of borders.
+	real_t hb_sum = border_left + border_right;
+	real_t vb_sum = border_top + border_bottom;
+
+	// Ratio of each side to the sum of itself and opposite side.
+	// Since overflow only happens with opposite borders, you only need to get the ratio of each border relative to the sum of involved borders.
+	real_t ratios[4] = {
+		// Prevent divide by 0 errors.
+		hb_sum > 0 ? (border_left / hb_sum) : 0,
+		vb_sum > 0 ? (border_top / vb_sum) : 0,
+		hb_sum > 0 ? (border_right / hb_sum) : 0,
+		vb_sum > 0 ? (border_bottom / vb_sum) : 0
+	};
+
+	// Raw amount each corner should shrink.
+	Point2 corner_reduction[4] = {
+		Point2(edge_overflow[SIDE_TOP] * ratios[SIDE_LEFT], edge_overflow[SIDE_LEFT] * ratios[SIDE_TOP]),
+		Point2(edge_overflow[SIDE_TOP] * ratios[SIDE_RIGHT], edge_overflow[SIDE_RIGHT] * ratios[SIDE_TOP]),
+		Point2(edge_overflow[SIDE_BOTTOM] * ratios[SIDE_RIGHT], edge_overflow[SIDE_RIGHT] * ratios[SIDE_BOTTOM]),
+		Point2(edge_overflow[SIDE_BOTTOM] * ratios[SIDE_LEFT], edge_overflow[SIDE_LEFT] * ratios[SIDE_BOTTOM]),
+	};
+
+	// Corner Radii as Point2s.
+	Point2 pcr[4] = {
+		Point2(corner_radius[0], corner_radius[0]),
+		Point2(corner_radius[1], corner_radius[1]),
+		Point2(corner_radius[2], corner_radius[2]),
+		Point2(corner_radius[3], corner_radius[3]),
+	};
+
+	// If corner radii are too small, they won't shrink the full amount.
+	// Adjacent corners will have to shrink the leftovers if they can.
+	// Minf(0) is to ignore non-leftovers, and negating is to make values positive.
+	Point2 leftovers[4] = {
+		-((pcr[0] - corner_reduction[0]).minf(0)),
+		-((pcr[1] - corner_reduction[1]).minf(0)),
+		-((pcr[2] - corner_reduction[2]).minf(0)),
+		-((pcr[3] - corner_reduction[3]).minf(0)),
+	};
+
+	// New shrunken radii after distributing the leftovers.
+	Point2 distributed[4] = {
+		((pcr[0] - corner_reduction[0] - leftovers[3] - leftovers[1]).maxf(0)),
+		((pcr[1] - corner_reduction[1] - leftovers[0] - leftovers[2]).maxf(0)),
+		((pcr[2] - corner_reduction[2] - leftovers[1] - leftovers[3]).maxf(0)),
+		((pcr[3] - corner_reduction[3] - leftovers[2] - leftovers[0]).maxf(0)),
+	};
+
+	// How much the curve should scale to achieve the shrunken radii.
+	for (int i = 0; i < 4; i++) {
+		// Unshrinkable is how much is still left over, even after distributing leftovers.
+		// Exclude it from the final scale.
+		Point2 unshrinkable = (leftovers[(i + 1) % 4] + leftovers[(i + 4 - 1) % 4] - distributed[i]).maxf(0);
+		inner_scale[i] = distributed[i] / (pcr[i] - unshrinkable).maxf(FLT_EPSILON);
+	}
+}
+
+inline void draw_rounded_rectangle(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
+		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color &inner_color, const Color &outer_color, const int corner_detail, const Vector2 &skew, bool is_filled = false) {
+	int vert_offset = verts.size();
+	int adapted_corner_detail = (corner_radius[0] > 0) || (corner_radius[1] > 0) || (corner_radius[2] > 0) || (corner_radius[3] > 0) ? corner_detail : 1;
+
+	bool draw_border = !is_filled;
+
+	real_t ring_corner_radius[4];
+	set_inner_corner_radius(style_rect, ring_rect, corner_radius, ring_corner_radius);
+
+	Point2 ring_scale[4];
+	set_corner_scale(style_rect, ring_rect, ring_corner_radius, ring_scale);
+
+	// Corner radius center points.
+	Vector<Point2> outer_points = {
+		ring_rect.position + Vector2(ring_corner_radius[0], ring_corner_radius[0]) * ring_scale[0], //tl
+		Point2(ring_rect.position.x + ring_rect.size.x - ring_corner_radius[1] * ring_scale[1].x, ring_rect.position.y + ring_corner_radius[1] * ring_scale[1].y), //tr
+		ring_rect.position + ring_rect.size - Vector2(ring_corner_radius[2], ring_corner_radius[2]) * ring_scale[2], //br
+		Point2(ring_rect.position.x + ring_corner_radius[3] * ring_scale[3].x, ring_rect.position.y + ring_rect.size.y - ring_corner_radius[3] * ring_scale[3].y) //bl
+	};
+
+	real_t inner_corner_radius[4];
+	set_inner_corner_radius(style_rect, inner_rect, corner_radius, inner_corner_radius);
+
+	Point2 inner_scale[4];
+	set_corner_scale(style_rect, inner_rect, inner_corner_radius, inner_scale);
+
+	Vector<Point2> inner_points = {
+		inner_rect.position + Vector2(inner_corner_radius[0], inner_corner_radius[0]) * inner_scale[0], //tl
+		Point2(inner_rect.position.x + inner_rect.size.x - inner_corner_radius[1] * inner_scale[1].x, inner_rect.position.y + inner_corner_radius[1] * inner_scale[1].y), //tr
+		inner_rect.position + inner_rect.size - Vector2(inner_corner_radius[2], inner_corner_radius[2]) * inner_scale[2], //br
+		Point2(inner_rect.position.x + inner_corner_radius[3] * inner_scale[3].x, inner_rect.position.y + inner_rect.size.y - inner_corner_radius[3] * inner_scale[3].y) //bl
+	};
+
+	// Calculate the vertices.
+
+	// If the center is filled, we do not draw the border and directly use the inner ring as reference. Because all calls to this
+	// method either draw a ring or a filled rounded rectangle, but not both.
+	const real_t quarter_arc_rad = Math::PI / 2.0;
+	const Point2 style_rect_center = style_rect.get_center();
+
+	const int colors_size = colors.size();
+	const int verts_size = verts.size();
+	const int new_verts_amount = (adapted_corner_detail + 1) * (draw_border ? 8 : 4);
+
+	colors.resize(colors_size + new_verts_amount);
+	verts.resize(verts_size + new_verts_amount);
+	Color *colors_ptr = colors.ptrw();
+	Vector2 *verts_ptr = verts.ptrw();
+
+	for (int corner_idx = 0; corner_idx < 4; corner_idx++) {
+		for (int detail = 0; detail <= adapted_corner_detail; detail++) {
+			int idx_ofs = (adapted_corner_detail + 1) * corner_idx + detail;
+			if (draw_border) {
+				idx_ofs *= 2;
+			}
+
+			const real_t pt_angle = (corner_idx + detail / (double)adapted_corner_detail) * quarter_arc_rad + Math::PI;
+			const real_t angle_cosine = Math::cos(pt_angle);
+			const real_t angle_sine = Math::sin(pt_angle);
+
+			{
+				const real_t x = inner_corner_radius[corner_idx] * angle_cosine * inner_scale[corner_idx].x + inner_points[corner_idx].x;
+				const real_t y = inner_corner_radius[corner_idx] * angle_sine * inner_scale[corner_idx].y + inner_points[corner_idx].y;
+				const float x_skew = -skew.x * (y - style_rect_center.y);
+				const float y_skew = -skew.y * (x - style_rect_center.x);
+				verts_ptr[verts_size + idx_ofs] = Vector2(x + x_skew, y + y_skew);
+				colors_ptr[colors_size + idx_ofs] = inner_color;
+			}
+
+			if (draw_border) {
+				const real_t x = ring_corner_radius[corner_idx] * angle_cosine * ring_scale[corner_idx].x + outer_points[corner_idx].x;
+				const real_t y = ring_corner_radius[corner_idx] * angle_sine * ring_scale[corner_idx].y + outer_points[corner_idx].y;
+				const float x_skew = -skew.x * (y - style_rect_center.y);
+				const float y_skew = -skew.y * (x - style_rect_center.x);
+				verts_ptr[verts_size + idx_ofs + 1] = Vector2(x + x_skew, y + y_skew);
+				colors_ptr[colors_size + idx_ofs + 1] = outer_color;
+			}
+		}
+	}
+
+	int ring_vert_count = verts.size() - vert_offset;
+
+	// Fill the indices and the colors for the border.
+
+	if (draw_border) {
+		int indices_size = indices.size();
+		indices.resize(indices_size + ring_vert_count * 3);
+		int *indices_ptr = indices.ptrw();
+
+		for (int i = 0; i < ring_vert_count; i++) {
+			int idx_ofs = indices_size + i * 3;
+			indices_ptr[idx_ofs] = vert_offset + i % ring_vert_count;
+			indices_ptr[idx_ofs + 1] = vert_offset + (i + 2) % ring_vert_count;
+			indices_ptr[idx_ofs + 2] = vert_offset + (i + 1) % ring_vert_count;
+		}
+	}
+
+	if (is_filled) {
+		// Compute the triangles pattern to draw the rounded rectangle.
+		// Consists of vertical stripes of two triangles each.
+
+		int stripes_count = ring_vert_count / 2 - 1;
+		int last_vert_id = ring_vert_count - 1;
+
+		int indices_size = indices.size();
+		indices.resize(indices_size + stripes_count * 6);
+		int *indices_ptr = indices.ptrw();
+
+		for (int i = 0; i < stripes_count; i++) {
+			int idx_ofs = indices_size + i * 6;
+			// Polygon 1.
+			indices_ptr[idx_ofs] = vert_offset + i;
+			indices_ptr[idx_ofs + 1] = vert_offset + last_vert_id - i - 1;
+			indices_ptr[idx_ofs + 2] = vert_offset + i + 1;
+			// Polygon 2.
+			indices_ptr[idx_ofs + 3] = vert_offset + i;
+			indices_ptr[idx_ofs + 4] = vert_offset + last_vert_id - i;
+			indices_ptr[idx_ofs + 5] = vert_offset + last_vert_id - i - 1;
+		}
+	}
+}
+
+inline void adapt_values(int p_index_a, int p_index_b, real_t *adapted_values, const real_t *p_values, const real_t p_width, const real_t p_max_a, const real_t p_max_b) {
+	real_t value_a = p_values[p_index_a];
+	real_t value_b = p_values[p_index_b];
+	real_t factor = (value_a + value_b == 0.0) ? 1.0 : MIN(1.0, p_width / (value_a + value_b));
+	adapted_values[p_index_a] = MIN(MIN(value_a * factor, p_max_a), adapted_values[p_index_a]);
+	adapted_values[p_index_b] = MIN(MIN(value_b * factor, p_max_b), adapted_values[p_index_b]);
+}
+
+// Samples the background texture at a UV coordinate, so the border blend can fade into the
+// actual colors drawn at the background's edge instead of the flat background color.
+inline Color sample_texture_bilinear(const Image &p_image, const Point2 &p_uv) {
+	const int width = p_image.get_width();
+	const int height = p_image.get_height();
+	if (width <= 0 || height <= 0) {
+		return Color(1, 1, 1, 1);
+	}
+
+	const real_t x = p_uv.x * width - 0.5f;
+	const real_t y = p_uv.y * height - 0.5f;
+
+	const int x0 = CLAMP((int)Math::floor(x), 0, width - 1);
+	const int y0 = CLAMP((int)Math::floor(y), 0, height - 1);
+	const int x1 = MIN(x0 + 1, width - 1);
+	const int y1 = MIN(y0 + 1, height - 1);
+
+	const float frac_x = CLAMP((float)(x - Math::floor(x)), 0.0f, 1.0f);
+	const float frac_y = CLAMP((float)(y - Math::floor(y)), 0.0f, 1.0f);
+
+	Color top = p_image.get_pixel(x0, y0).lerp(p_image.get_pixel(x1, y0), frac_x);
+	Color bottom = p_image.get_pixel(x0, y1).lerp(p_image.get_pixel(x1, y1), frac_x);
+	return top.lerp(bottom, frac_y);
+}
+
+// Generates the triangle strip for one side's border texture. At sharp corners the strip is
+// mitered: it is cut along the diagonal that joins the outer corner vertex to the inner
+// (background) corner vertex, so adjacent sides meet without overlapping. At rounded corners
+// the strip wraps around the full adjacent corner arcs: the side drawn earlier stays opaque
+// underneath, while the side drawn later fades across the arc, so the corner is an exact mix
+// of the two textures with none of the underlying colors bleeding through. When antialiasing
+// is enabled, the strip fades out over its own extra vertex rows at both edges, so textured
+// borders provide their antialiasing themselves (the flat ring skips its outer and inner
+// gradients for boxes with textured sides).
+inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_indices, Vector<Color> &r_colors, Vector<Point2> &r_uvs,
+		const Rect2 &p_style_rect, const real_t p_border[4], const real_t p_adapted_corner[4], Side p_side, int p_corner_detail,
+		real_t p_outer_inset, real_t p_inner_recess, const Vector2 &p_skew, const Color &p_color, bool p_fade_at_start_corner, bool p_fade_at_end_corner) {
+	const int corner_start = (p_side + 3) % 4;
+	const int corner_end = (int)p_side % 4;
+
+	// The inner boundary follows the full border widths (the infill rect), so it lines up
+	// exactly with the inner edge of the flat border ring, corners included. In blend mode the
+	// boundary is recessed a little further so the texture finishes fading out before the
+	// background's interior edge; the fade scrim reaches full background color at the same
+	// line, so no border color bleeds through at the inner edge.
+	const Rect2 inner_rect = p_style_rect.grow_individual(-p_border[SIDE_LEFT], -p_border[SIDE_TOP],
+			-p_border[SIDE_RIGHT], -p_border[SIDE_BOTTOM]).grow_individual(p_inner_recess, p_inner_recess,
+			p_inner_recess, p_inner_recess);
+
+	auto corner_point = [](const Rect2 &p_rect, int p_corner) -> Point2 {
+		switch (p_corner) {
+			case CORNER_TOP_LEFT: return p_rect.position;
+			case CORNER_TOP_RIGHT: return Point2(p_rect.position.x + p_rect.size.x, p_rect.position.y);
+			case CORNER_BOTTOM_RIGHT: return p_rect.position + p_rect.size;
+			default: return Point2(p_rect.position.x, p_rect.position.y + p_rect.size.y);
+		}
+	};
+
+	auto corner_sign = [](int p_corner) -> Vector2 {
+		switch (p_corner) {
+			case CORNER_TOP_LEFT: return Vector2(1, 1);
+			case CORNER_TOP_RIGHT: return Vector2(-1, 1);
+			case CORNER_BOTTOM_RIGHT: return Vector2(-1, -1);
+			default: return Vector2(1, -1);
+		}
+	};
+
+	// Arc centers and radii for a corner. Keeping the outer center tied to the full (un-inset)
+	// radius makes the eroded arc end exactly where the inset straight edge begins.
+	auto arc_data = [&](int p_corner, Point2 &r_outer_center, real_t &r_outer_radius, Point2 &r_inner_center, real_t &r_inner_radius) {
+		r_outer_radius = MAX(p_adapted_corner[p_corner] - p_outer_inset, 0);
+		r_inner_radius = MAX(p_adapted_corner[p_corner] - MIN(p_border[p_corner], p_border[(p_corner + 1) % 4]), 0);
+		r_outer_center = corner_point(p_style_rect, p_corner) + corner_sign(p_corner) * Vector2(p_adapted_corner[p_corner], p_adapted_corner[p_corner]);
+		r_inner_center = corner_point(inner_rect, p_corner) + corner_sign(p_corner) * Vector2(r_inner_radius, r_inner_radius);
+	};
+
+	constexpr int MAX_COLS = 96;
+	Point2 col_pts[MAX_COLS][4];
+	real_t col_alphas[MAX_COLS];
+	real_t col_vs[MAX_COLS][4];
+	int col_count = 0;
+
+	// Each column holds, in order: the outer antialiasing vertex (alpha 0 at the true
+	// silhouette), the solid outer vertex, the solid inner vertex, and the inner antialiasing
+	// vertex (alpha 0 over the background fill), all sharing one alpha. Without antialiasing,
+	// only the two solid vertices are emitted. Texture v coordinates are measured geometrically
+	// so the solid band always spans the full 0..1 range; the fade rows fall outside it.
+	const bool faded_edges = p_outer_inset > 0.0;
+	// Without antialiasing the strips normally end hard at their inner boundary. When they
+	// blend into the background their inner edge sits a few pixels inside the border, and the
+	// hard edge's partial-pixel coverage would leave a faint rim of the border color at the
+	// background's edge. Add a short taper that fades the texture to transparent alpha over
+	// that inset, so the rasterizer's edge coverage has no color left to contribute.
+	const bool tapered_inner = p_inner_recess > 0.0 && !faded_edges;
+	const int rows = faded_edges ? 4 : (tapered_inner ? 3 : 2);
+
+	auto add_column = [&](const Point2 &p_outer_true, const Point2 &p_outer_solid, const Point2 &p_inner_solid, const Point2 &p_inner_fade, real_t p_alpha) {
+		if (col_count >= MAX_COLS) {
+			return;
+		}
+		if (faded_edges) {
+			col_pts[col_count][0] = p_outer_true;
+			col_pts[col_count][1] = p_outer_solid;
+			col_pts[col_count][2] = p_inner_solid;
+			col_pts[col_count][3] = p_inner_fade;
+			const real_t band = (p_inner_solid - p_outer_solid).length();
+			if (band > 0.0001) {
+				col_vs[col_count][0] = -(p_outer_solid - p_outer_true).length() / band;
+				col_vs[col_count][1] = 0.0;
+				col_vs[col_count][2] = 1.0;
+				col_vs[col_count][3] = 1.0 + (p_inner_fade - p_inner_solid).length() / band;
+			} else {
+				for (int r = 0; r < rows; r++) {
+					col_vs[col_count][r] = (real_t)r / (rows - 1);
+				}
+			}
+		} else if (tapered_inner) {
+			const Vector2 dir = (p_inner_solid - p_outer_solid).normalized();
+			col_pts[col_count][0] = p_outer_solid;
+			col_pts[col_count][1] = p_inner_solid - dir * p_inner_recess;
+			col_pts[col_count][2] = p_inner_solid;
+			const real_t band = (p_inner_solid - dir * p_inner_recess - p_outer_solid).length();
+			if (band > 0.0001) {
+				col_vs[col_count][0] = 0.0;
+				col_vs[col_count][1] = 1.0;
+				col_vs[col_count][2] = 1.0 + p_inner_recess / band;
+			} else {
+				for (int r = 0; r < rows; r++) {
+					col_vs[col_count][r] = (real_t)r / (rows - 1);
+				}
+			}
+		} else {
+			col_pts[col_count][0] = p_outer_solid;
+			col_pts[col_count][1] = p_inner_solid;
+			col_vs[col_count][0] = 0.0;
+			col_vs[col_count][1] = 1.0;
+		}
+		col_alphas[col_count] = p_alpha;
+		col_count++;
+	};
+
+	const int arc_detail = p_corner_detail + 1;
+
+	auto add_arc_columns = [&](int p_corner, real_t p_angle_from, real_t p_angle_to, real_t p_alpha_from, real_t p_alpha_to, bool p_skip_first) {
+		Point2 outer_center;
+		real_t outer_radius;
+		Point2 inner_center;
+		real_t inner_radius;
+		arc_data(p_corner, outer_center, outer_radius, inner_center, inner_radius);
+		const real_t outer_full_radius = p_adapted_corner[p_corner];
+		const real_t inner_fade_radius = MAX(inner_radius - p_outer_inset, 0);
+		for (int k = p_skip_first ? 1 : 0; k < arc_detail; k++) {
+			const real_t t = (real_t)k / (arc_detail - 1);
+			const real_t angle = Math::lerp(p_angle_from, p_angle_to, t);
+			const Vector2 dir = Vector2(Math::cos(angle), Math::sin(angle));
+			add_column(outer_center + dir * outer_full_radius,
+					outer_center + dir * outer_radius,
+					inner_center + dir * inner_radius,
+					inner_center + dir * inner_fade_radius,
+					Math::lerp(p_alpha_from, p_alpha_to, t));
+		}
+	};
+
+	auto add_junction_column = [&](int p_corner, real_t p_angle, real_t p_alpha) {
+		Point2 outer_center;
+		real_t outer_radius;
+		Point2 inner_center;
+		real_t inner_radius;
+		arc_data(p_corner, outer_center, outer_radius, inner_center, inner_radius);
+		const real_t outer_full_radius = p_adapted_corner[p_corner];
+		const real_t inner_fade_radius = MAX(inner_radius - p_outer_inset, 0);
+		const Vector2 dir = Vector2(Math::cos(p_angle), Math::sin(p_angle));
+		add_column(outer_center + dir * outer_full_radius,
+				outer_center + dir * outer_radius,
+				inner_center + dir * inner_radius,
+				inner_center + dir * inner_fade_radius,
+				p_alpha);
+	};
+
+	auto add_miter_column = [&](int p_corner, real_t p_alpha) {
+		const Point2 outer = corner_point(p_style_rect, p_corner);
+		const Point2 inner = corner_point(inner_rect, p_corner);
+		Point2 outer_solid = outer;
+		Point2 inner_fade = inner;
+		if (faded_edges && outer != inner) {
+			const Vector2 diag_dir = (inner - outer).normalized();
+			outer_solid = outer + diag_dir * p_outer_inset;
+			inner_fade = inner + diag_dir * p_outer_inset;
+		}
+		add_column(outer, outer_solid, inner, inner_fade, p_alpha);
+	};
+
+	// Start corner: this side fades in across the full arc (unless it must stay opaque as the
+	// base layer for a later-drawn textured neighbor), or takes a miter cut when sharp.
+	{
+		const real_t base_angle = Math::PI + corner_start * (Math::PI / 2.0);
+		if (p_adapted_corner[corner_start] > 0) {
+			add_arc_columns(corner_start, base_angle, base_angle + Math::PI / 2.0, p_fade_at_start_corner ? 0.0 : 1.0, 1.0, false);
+		} else {
+			add_miter_column(corner_start, 1.0);
+		}
+	}
+
+	// Far end of the straight edge (the end corner's junction point), followed by the end
+	// corner's full arc fading out (or staying opaque when this side is the base layer for a
+	// later-drawn textured neighbor), or the miter point when sharp.
+	{
+		const real_t base_angle = Math::PI + corner_end * (Math::PI / 2.0);
+		if (p_adapted_corner[corner_end] > 0) {
+			add_junction_column(corner_end, base_angle, 1.0);
+			add_arc_columns(corner_end, base_angle, base_angle + Math::PI / 2.0, 1.0, p_fade_at_end_corner ? 0.0 : 1.0, true);
+		} else {
+			add_miter_column(corner_end, 1.0);
+		}
+	}
+
+	if (col_count < 2) {
+		return;
+	}
+
+	// Emit the strip: consecutive columns of `rows` vertices each. The edge rows (when
+	// antialiasing) fade the texture in and out over its own soft edges.
+	const int vert_base = r_verts.size();
+	const int color_base = r_colors.size();
+	const int uv_base = r_uvs.size();
+	r_verts.resize(vert_base + col_count * rows);
+	r_colors.resize(color_base + col_count * rows);
+	r_uvs.resize(uv_base + col_count * rows);
+	Point2 *verts_ptr = r_verts.ptrw();
+	Color *colors_ptr = r_colors.ptrw();
+	Point2 *uvs_ptr = r_uvs.ptrw();
+
+	const bool skewed = !p_skew.is_zero_approx();
+	const Point2 center = p_style_rect.get_center();
+
+	for (int j = 0; j < col_count; j++) {
+		const real_t u = (real_t)j / (col_count - 1);
+		const real_t alpha = p_color.a * col_alphas[j];
+		for (int r = 0; r < rows; r++) {
+			Point2 pt = col_pts[j][r];
+			if (skewed) {
+				pt += Vector2(-p_skew.x * (pt.y - center.y), -p_skew.y * (pt.x - center.x));
+			}
+			real_t row_alpha;
+			// In blend mode the strips stay opaque like the un-blended path (their corner
+			// crossfade must not double up when two textures overlap); a separate fade-to-bg
+			// scrim drawn over them handles blending into the background. The final row of a
+			// tapered (no antialiasing but blending) strip fades the texture out so the
+			// background's inner edge carries no border color where the strip ends.
+			if (faded_edges) {
+				row_alpha = (r == 1 || r == 2) ? 1.0 : 0.0;
+			} else if (tapered_inner && r == rows - 1) {
+				row_alpha = 0.0;
+			} else {
+				row_alpha = 1.0;
+			}
+			verts_ptr[vert_base + j * rows + r] = pt;
+			colors_ptr[color_base + j * rows + r] = Color(p_color.r, p_color.g, p_color.b, alpha * row_alpha);
+			uvs_ptr[uv_base + j * rows + r] = Vector2(u, col_vs[j][r]);
+		}
+	}
+
+	const int index_base = r_indices.size();
+	r_indices.resize(index_base + (col_count - 1) * (rows - 1) * 6);
+	int *indices_ptr = r_indices.ptrw();
+	int ofs = 0;
+	for (int j = 0; j < col_count - 1; j++) {
+		for (int r = 0; r < rows - 1; r++) {
+			const int a = vert_base + j * rows + r;
+			const int b = a + rows;
+			indices_ptr[index_base + ofs++] = a;
+			indices_ptr[index_base + ofs++] = b;
+			indices_ptr[index_base + ofs++] = a + 1;
+			indices_ptr[index_base + ofs++] = a + 1;
+			indices_ptr[index_base + ofs++] = b;
+			indices_ptr[index_base + ofs++] = b + 1;
+		}
+	}
+}
+
+Rect2 StyleBoxGradient::get_draw_rect(const Rect2 &p_rect) const {
+	Rect2 draw_rect = p_rect.grow_individual(expand_margin[SIDE_LEFT], expand_margin[SIDE_TOP], expand_margin[SIDE_RIGHT], expand_margin[SIDE_BOTTOM]);
+
+	if (shadow_size > 0) {
+		Rect2 shadow_rect = draw_rect.grow(shadow_size);
+		shadow_rect.position += shadow_offset;
+		draw_rect = draw_rect.merge(shadow_rect);
+	}
+
+	return draw_rect;
+}
+
+void StyleBoxGradient::draw(RID p_canvas_item, const Rect2 &p_rect) const {
+	begin_draw(p_canvas_item, p_rect);
+
+	Rect2 rect_animated = get_animated_value(SNAME("rect"), p_rect);
+
+	Color bg_color_animated = get_animated_value(SNAME("bg_color"), bg_color);
+	Color border_color_animated = get_animated_value(SNAME("border/color"), border_color);
+	Color modulate_animated = get_animated_value(SNAME("modulate"), modulate);
+
+	bg_color_animated *= modulate_animated;
+	border_color_animated *= modulate_animated;
+
+	real_t expand_margin_animated[4] = {
+		get_animated_value(SNAME("expand/margin_left"), expand_margin[SIDE_LEFT]),
+		get_animated_value(SNAME("expand/margin_top"), expand_margin[SIDE_TOP]),
+		get_animated_value(SNAME("expand/margin_right"), expand_margin[SIDE_RIGHT]),
+		get_animated_value(SNAME("expand/margin_bottom"), expand_margin[SIDE_BOTTOM])
+	};
+
+	real_t border_width_animated[4] = {
+		get_animated_value(SNAME("border/width_left"), border_width[SIDE_LEFT]),
+		get_animated_value(SNAME("border/width_top"), border_width[SIDE_TOP]),
+		get_animated_value(SNAME("border/width_right"), border_width[SIDE_RIGHT]),
+		get_animated_value(SNAME("border/width_bottom"), border_width[SIDE_BOTTOM]),
+	};
+	for (int i = 0; i < 4; i++) {
+		border_width_animated[i] = MAX(0, border_width_animated[i]);
+	}
+	real_t corner_radius_animated[4];
+	corner_radius_animated[0] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/top_left"), corner_radius[CORNER_TOP_LEFT]));
+	corner_radius_animated[1] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/top_right"), corner_radius[CORNER_TOP_RIGHT]));
+	corner_radius_animated[2] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/bottom_right"), corner_radius[CORNER_BOTTOM_RIGHT]));
+	corner_radius_animated[3] = MAX(0.0, (real_t)get_animated_value(SNAME("corner_radius/bottom_left"), corner_radius[CORNER_BOTTOM_LEFT]));
+
+	real_t shadow_size_animated = get_animated_value(SNAME("shadow/size"), shadow_size);
+	Vector2 shadow_offset_animated = get_animated_value(SNAME("shadow/offset"), shadow_offset);
+	Color shadow_color_animated = get_animated_value(SNAME("shadow/color"), shadow_color);
+
+	shadow_color_animated *= modulate_animated;
+
+	bool draw_border = (border_width_animated[0] > 0) || (border_width_animated[1] > 0) || (border_width_animated[2] > 0) || (border_width_animated[3] > 0);
+	bool draw_shadow = (shadow_size_animated > 0);
+	bool draw_inset_shadow = (inset_shadow_size > 0);
+	if (!draw_border && !draw_center && !draw_shadow && !draw_inset_shadow) {
+		return;
+	}
+
+	Rect2 style_rect = rect_animated.grow_individual(expand_margin_animated[SIDE_LEFT], expand_margin_animated[SIDE_TOP], expand_margin_animated[SIDE_RIGHT], expand_margin_animated[SIDE_BOTTOM]);
+	if (Math::is_zero_approx(style_rect.size.width) || Math::is_zero_approx(style_rect.size.height)) {
+		return;
+	}
+
+	const bool rounded_corners = (corner_radius_animated[0] > 0) || (corner_radius_animated[1] > 0) || (corner_radius_animated[2] > 0) || (corner_radius_animated[3] > 0);
+	// Only enable antialiasing if it is actually needed. This improves performance
+	// and maximizes sharpness for non-skewed StyleBoxes with sharp corners.
+	const bool aa_on = (rounded_corners || !skew.is_zero_approx()) && anti_aliased;
+
+	const bool blend_on = blend_border && draw_border;
+
+	Color border_color_alpha = Color(border_color_animated, 0.0f);
+	Color border_color_blend = (draw_center ? bg_color_animated : border_color_alpha);
+	Color border_color_inner = blend_on ? border_color_blend : border_color_animated;
+
+	// When the border blends into the background, its inner edge must fade into the colors
+	// actually drawn at the background's edge. If the background is textured, those colors are
+	// looked up by sampling the texture at the border's inner boundary instead of using the
+	// flat background color.
+	const bool blend_with_bg_texture = blend_on && draw_center && bg_texture.is_valid();
+
+	if (blend_with_bg_texture && bg_texture_image.is_null()) {
+		Ref<Image> image = bg_texture->get_image();
+		if (image.is_valid() && image->is_compressed()) {
+			image = image->duplicate();
+			image->decompress();
+		}
+		if (image.is_valid() && !image->is_compressed()) {
+			bg_texture_image = image;
+		}
+	}
+
+	real_t aa_size_scaled = 1.0f;
+	if (aa_on) {
+		real_t scale_factor = TextServer::get_current_drawn_item_oversampling();
+		if (scale_factor == 0.0) {
+			scale_factor = 1.0;
+		}
+
+		// Adjust AA feather size to account for the 2D scale factor, so that
+		// antialiasing doesn't become blurry at viewport resolutions higher
+		// than the default when using the `canvas_items` stretch mode
+		// (or when using `oversampling` values different than `1.0`).
+		aa_size_scaled = aa_size / scale_factor;
+	}
+
+	// Adapt borders (prevent weird overlapping/glitchy drawings).
+	real_t aa_shrink = aa_on ? aa_size_scaled * 2 : 0;
+	real_t width = MAX(style_rect.size.width - aa_shrink, 0);
+	real_t height = MAX(style_rect.size.height - aa_shrink, 0);
+	real_t adapted_border[4] = { 1000000.0, 1000000.0, 1000000.0, 1000000.0 };
+	adapt_values(SIDE_TOP, SIDE_BOTTOM, adapted_border, border_width_animated, height, height, height);
+	adapt_values(SIDE_LEFT, SIDE_RIGHT, adapted_border, border_width_animated, width, width, width);
+
+	// Adapt corners (prevent weird overlapping/glitchy drawings).
+	real_t adapted_corner[4] = { 1000000.0, 1000000.0, 1000000.0, 1000000.0 };
+	adapt_values(CORNER_TOP_RIGHT, CORNER_BOTTOM_RIGHT, adapted_corner, corner_radius_animated, height, height - adapted_border[SIDE_BOTTOM], height - adapted_border[SIDE_TOP]);
+	adapt_values(CORNER_TOP_LEFT, CORNER_BOTTOM_LEFT, adapted_corner, corner_radius_animated, height, height - adapted_border[SIDE_BOTTOM], height - adapted_border[SIDE_TOP]);
+	adapt_values(CORNER_TOP_LEFT, CORNER_TOP_RIGHT, adapted_corner, corner_radius_animated, width, width - adapted_border[SIDE_RIGHT], width - adapted_border[SIDE_LEFT]);
+	adapt_values(CORNER_BOTTOM_LEFT, CORNER_BOTTOM_RIGHT, adapted_corner, corner_radius_animated, width, width - adapted_border[SIDE_RIGHT], width - adapted_border[SIDE_LEFT]);
+
+	Rect2 infill_rect = style_rect.grow_individual(-adapted_border[SIDE_LEFT], -adapted_border[SIDE_TOP], -adapted_border[SIDE_RIGHT], -adapted_border[SIDE_BOTTOM]);
+
+	Rect2 border_style_rect = style_rect;
+
+	if (aa_on) {
+		for (int i = 0; i < 4; i++) {
+			if (border_width_animated[i] > 0) {
+				border_style_rect = border_style_rect.grow_side((Side)i, -aa_size_scaled);
+			}
+		}
+	}
+
+	Vector<Point2> verts;
+	Vector<int> indices;
+	Vector<Color> colors;
+	Vector<Point2> uvs;
+
+	Vector<int> fi;
+	Vector<int> bi;
+	Vector<int> si;
+	Vector<int> isi;
+
+	// Vertex range of the flat border ring. Used to overwrite its inner edge with the sampled
+	// background texture color when the border blends into a textured background.
+	int border_ring_base = -1;
+	int border_ring_count = 0;
+
+	// Per-side outer fade width for the border texture strips: the texture fades out over
+	// this distance from the true silhouette, providing its own outer antialiasing. The flat
+	// ring's solid area starts exactly where the fade reaches full opacity.
+	real_t tex_outer_inset[4] = {};
+	bool tex_side_drawn[4] = {};
+	bool has_border_textures = false;
+	for (int i = 0; i < 4; i++) {
+		if (aa_on && border_width_animated[i] > 0) {
+			tex_outer_inset[i] = aa_size_scaled * 0.5;
+		}
+		tex_side_drawn[i] = border_textures[i].is_valid() && adapted_border[i] > tex_outer_inset[i];
+		has_border_textures |= tex_side_drawn[i];
+	}
+
+	const Color ring_base_color = (blend_on && has_border_textures) ? border_color_inner : border_color_animated;
+	bool share_indices = bg_texture.is_null() && shadow_texture.is_null() && !has_border_textures;
+	Vector<int> &fill_indices = share_indices ? indices : fi;
+	Vector<int> &border_indices = share_indices ? indices : bi;
+	Vector<int> &shadow_indices = share_indices ? indices : si;
+	Vector<int> &inset_indices = share_indices ? indices : isi;
+
+	// Create shadow.
+	if (draw_shadow) {
+		Rect2 shadow_inner_rect = style_rect;
+		shadow_inner_rect.position += shadow_offset_animated;
+
+		Rect2 shadow_rect = style_rect.grow(shadow_size_animated);
+		shadow_rect.position += shadow_offset_animated;
+
+		Color shadow_color_transparent = Color(shadow_color_animated, 0.0f);
+
+		draw_rounded_rectangle(verts, shadow_indices, colors, shadow_inner_rect, adapted_corner,
+				shadow_rect, shadow_inner_rect, shadow_color_animated, shadow_color_transparent, corner_detail, skew);
+
+		if (draw_center) {
+			draw_rounded_rectangle(verts, shadow_indices, colors, shadow_inner_rect, adapted_corner,
+					shadow_inner_rect, shadow_inner_rect, shadow_color_animated, shadow_color_animated, corner_detail, skew, true);
+		}
+	}
+
+	// Create border (no AA).
+	if (draw_border && !aa_on) {
+		border_ring_base = verts.size();
+		draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
+				border_style_rect, infill_rect, border_color_inner, ring_base_color, corner_detail, skew);
+		border_ring_count = verts.size() - border_ring_base;
+	}
+
+	// Create infill (no AA).
+	if (draw_center && (!aa_on || blend_on)) {
+		draw_rounded_rectangle(verts, fill_indices, colors, border_style_rect, adapted_corner,
+				infill_rect, infill_rect, bg_color_animated, bg_color_animated, corner_detail, skew, true);
+	}
+
+	if (aa_on) {
+		real_t aa_border_width[4];
+		real_t aa_border_width_half[4];
+		real_t aa_fill_width[4];
+		real_t aa_fill_width_half[4];
+
+		if (draw_border) {
+			for (int i = 0; i < 4; i++) {
+				if (border_width_animated[i] > 0) {
+					aa_border_width[i] = aa_size_scaled;
+					aa_border_width_half[i] = aa_size_scaled * 0.5;
+					aa_fill_width[i] = 0;
+					aa_fill_width_half[i] = 0;
+				} else {
+					aa_border_width[i] = 0;
+					aa_border_width_half[i] = 0;
+					aa_fill_width[i] = aa_size_scaled;
+					aa_fill_width_half[i] = aa_size_scaled * 0.5;
+				}
+			}
+		} else {
+			for (int i = 0; i < 4; i++) {
+				aa_border_width[i] = 0;
+				aa_border_width_half[i] = 0;
+				aa_fill_width[i] = aa_size_scaled;
+				aa_fill_width_half[i] = aa_size_scaled * 0.5;
+			}
+		}
+
+		if (draw_center) {
+			// Infill rect, transparent side of antialiasing gradient (base infill rect enlarged by AA size)
+			Rect2 infill_rect_aa_transparent = infill_rect.grow_individual(aa_fill_width_half[SIDE_LEFT], aa_fill_width_half[SIDE_TOP],
+					aa_fill_width_half[SIDE_RIGHT], aa_fill_width_half[SIDE_BOTTOM]);
+			// Infill rect, colored side of antialiasing gradient (base infill rect shrunk by AA size)
+			Rect2 infill_rect_aa_colored = infill_rect_aa_transparent.grow_individual(-aa_fill_width[SIDE_LEFT], -aa_fill_width[SIDE_TOP],
+					-aa_fill_width[SIDE_RIGHT], -aa_fill_width[SIDE_BOTTOM]);
+			if (!blend_on) {
+				// Create center fill, not antialiased yet
+				draw_rounded_rectangle(verts, fill_indices, colors, border_style_rect, adapted_corner,
+						infill_rect_aa_colored, infill_rect_aa_colored, bg_color_animated, bg_color_animated, corner_detail, skew, true);
+			}
+			if (!blend_on || !draw_border) {
+				Color alpha_bg = Color(bg_color_animated, 0.0f);
+				// Add antialiasing on the center fill
+				draw_rounded_rectangle(verts, fill_indices, colors, border_style_rect, adapted_corner,
+						infill_rect_aa_transparent, infill_rect_aa_colored, bg_color_animated, alpha_bg, corner_detail, skew);
+			}
+		}
+
+		if (draw_border) {
+			// Inner border recct, fully colored side of antialiasing gradient (base inner rect enlarged by AA size)
+			Rect2 inner_rect_aa_colored = infill_rect.grow_individual(aa_border_width_half[SIDE_LEFT], aa_border_width_half[SIDE_TOP],
+					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
+			// Inner border rect, transparent side of antialiasing gradient (base inner rect shrunk by AA size)
+			Rect2 inner_rect_aa_transparent = inner_rect_aa_colored.grow_individual(-aa_border_width[SIDE_LEFT], -aa_border_width[SIDE_TOP],
+					-aa_border_width[SIDE_RIGHT], -aa_border_width[SIDE_BOTTOM]);
+			// Outer border rect, transparent side of antialiasing gradient (base outer rect enlarged by AA size)
+			Rect2 outer_rect_aa_transparent = style_rect.grow_individual(aa_border_width_half[SIDE_LEFT], aa_border_width_half[SIDE_TOP],
+					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
+			// Outer border rect, colored side of antialiasing gradient (base outer rect shrunk by AA size)
+			Rect2 outer_rect_aa_colored = border_style_rect.grow_individual(aa_border_width_half[SIDE_LEFT], aa_border_width_half[SIDE_TOP],
+					aa_border_width_half[SIDE_RIGHT], aa_border_width_half[SIDE_BOTTOM]);
+
+			// Create border ring, not antialiased yet
+			border_ring_base = verts.size();
+			draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
+					outer_rect_aa_colored, ((blend_on) ? infill_rect : inner_rect_aa_colored), border_color_inner, ring_base_color, corner_detail, skew);
+			border_ring_count = verts.size() - border_ring_base;
+			if (!blend_on && !has_border_textures) {
+				// Add antialiasing on the ring inner border. Skipped when any side has a border
+				// texture: those sides' strips carry their own inner fade (see below), and
+				// stacking this gradient beneath them would bleed border color into the texture
+				// edges and shift their colors.
+				draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
+						inner_rect_aa_colored, inner_rect_aa_transparent, border_color_blend, border_color_animated, corner_detail, skew);
+			}
+			if (!has_border_textures) {
+				// Add antialiasing on the ring outer border. Skipped when any side has a border
+				// texture: those sides' strips carry their own outer fade, and stacking it over
+				// this gradient would let the border color bleed through the softened edge.
+				draw_rounded_rectangle(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_transparent, outer_rect_aa_colored, border_color_animated, border_color_alpha, corner_detail, skew);
+			}
+		}
+	}
+
+	// Create inset shadow.
+	if (draw_inset_shadow) {
+		// Per-side total fade depth: the inset size, extended by the offset component that
+		// points along that side's inward direction. The shadow's outer edge always stays
+		// aligned with the background shape; only its reach changes per side.
+		const real_t hole_depth[4] = {
+			inset_shadow_offset.x,  // SIDE_LEFT
+			inset_shadow_offset.y,  // SIDE_TOP
+			-inset_shadow_offset.x, // SIDE_RIGHT
+			-inset_shadow_offset.y  // SIDE_BOTTOM
+		};
+
+		real_t fade_depth[4];
+		bool any_fade = false;
+		for (int i = 0; i < 4; i++) {
+			fade_depth[i] = MAX(inset_shadow_size + hole_depth[i], 0);
+			any_fade |= fade_depth[i] > 0;
+		}
+
+		if (any_fade) {
+			Color inset_shadow_color_modulated = inset_shadow_color * modulate_animated;
+			Color inset_color_transparent = Color(inset_shadow_color_modulated.r, inset_shadow_color_modulated.g, inset_shadow_color_modulated.b, 0);
+			Rect2 fade_outer = infill_rect;
+			Rect2 fade_inner = infill_rect.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP],
+					-fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
+
+			if (fade_inner.size.width > 0 && fade_inner.size.height > 0) {
+				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
+						fade_outer, fade_inner, inset_color_transparent, inset_shadow_color_modulated, corner_detail, skew);
+			} else {
+				// The fade never reaches zero inside the background area: cover it entirely.
+				draw_rounded_rectangle(verts, inset_indices, colors, style_rect, adapted_corner,
+						infill_rect, infill_rect, inset_shadow_color_modulated, inset_shadow_color_modulated, corner_detail, skew, true);
+			}
+		}
+	}
+
+	// Compute UV coordinates.
+	Rect2 uv_rect = style_rect.grow(aa_on ? aa_size_scaled : 0);
+	uvs.resize(verts.size());
+	Point2 *uvs_ptr = uvs.ptrw();
+	for (int i = 0; i < verts.size(); i++) {
+		uvs_ptr[i].x = (verts[i].x - uv_rect.position.x) / uv_rect.size.width;
+		uvs_ptr[i].y = (verts[i].y - uv_rect.position.y) / uv_rect.size.height;
+	}
+
+	// When blending, the border ring's inner edge fades into the background's edge color. If the
+	// background has a texture, sample it at the ring's inner boundary so the border blends into
+	// the actual background colors drawn there, never into the background's interior.
+	if (blend_with_bg_texture && bg_texture_image.is_valid() && border_ring_count > 0) {
+		Color *colors_ptr = colors.ptrw();
+		for (int i = 0; i < border_ring_count; i += 2) {
+			const int idx = border_ring_base + i;
+			colors_ptr[idx] = sample_texture_bilinear(*bg_texture_image.ptr(), uvs_ptr[idx]) * bg_color_animated;
+		}
+	}
+
+	// Draw stylebox.
+	RenderingServer *vs = RenderingServer::get_singleton();
+	if (!share_indices) {
+		if (draw_shadow) {
+			vs->canvas_item_add_triangle_array(p_canvas_item, shadow_indices, verts, colors, uvs, {}, {}, shadow_texture.is_valid() ? shadow_texture->get_rid() : RID());
+		}
+		if (draw_border) {
+			// The border ring itself is always drawn untextured; per-side border
+			// textures are drawn as separate strips above it further below.
+			vs->canvas_item_add_triangle_array(p_canvas_item, border_indices, verts, colors, uvs, {}, {}, RID());
+		}
+		if (draw_center) {
+			vs->canvas_item_add_triangle_array(p_canvas_item, fill_indices, verts, colors, uvs, {}, {}, bg_texture.is_valid() ? bg_texture->get_rid() : RID());
+		}
+		if (draw_inset_shadow) {
+			vs->canvas_item_add_triangle_array(p_canvas_item, inset_indices, verts, colors, uvs);
+		}
+	} else {
+		vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
+	}
+
+	// Draw the per-side border textures above the flat border ring. At sharp corners adjacent
+	// strips are mitered against each other's diagonal; at rounded corners both textures cover
+	// the full corner arc. The side drawn earlier stays opaque there, and the side drawn later
+	// fades across it, so the corner is an exact mix of both textures.
+	if (has_border_textures) {
+		// Distance the blend fade finishes before the background's interior edge. The strips
+		// stop drawing and the fade scrim reaches full background color at this recess, so the
+		// innermost border pixels blend all the way into the background (otherwise the last
+		// partial-opacity pixels would let a sliver of the border color through at its edge).
+		real_t min_drawn_border = 1e9;
+		for (int i = 0; i < 4; i++) {
+			if (tex_side_drawn[i]) {
+				min_drawn_border = MIN(min_drawn_border, adapted_border[i]);
+			}
+		}
+		const real_t scrim_recess = blend_on ? MIN(aa_size_scaled * 2.0, min_drawn_border * 0.5) : 0.0;
+
+		for (int i = 0; i < 4; i++) {
+			const Ref<Texture2D> &tex = border_textures[i];
+			if (tex.is_null() || !tex_side_drawn[i]) {
+				continue;
+			}
+
+			// Corner ownership by draw order: if the neighboring side at a corner is textured
+			// and drawn after this one, this strip must remain fully opaque across that arc so
+			// the neighbor's fade composites into it directly, without background bleeding in.
+			const int prev_side = (i + 3) % 4;
+			const int next_side = (i + 1) % 4;
+			const bool fade_start = !(i == 0 && tex_side_drawn[prev_side]);
+			const bool fade_end = !(i < 3 && tex_side_drawn[next_side]);
+
+			Vector<Point2> tex_verts;
+			Vector<int> tex_indices;
+			Vector<Color> tex_colors;
+			Vector<Point2> tex_uvs;
+			draw_border_texture_strip(tex_verts, tex_indices, tex_colors, tex_uvs, style_rect, adapted_border, adapted_corner,
+					(Side)i, corner_detail, tex_outer_inset[i], scrim_recess, skew, border_color_animated, fade_start, fade_end);
+
+			if (!tex_indices.is_empty()) {
+				vs->canvas_item_add_triangle_array(p_canvas_item, tex_indices, tex_verts, tex_colors, tex_uvs, {}, {}, tex->get_rid());
+			}
+		}
+
+		if (blend_on) {
+			// The textured strips above are drawn opaque so corners and straights share the same
+			// coverage. A fade scrim spans the border band and dissolves them into the
+			// background's edge color at the inner edge, blending the whole border (straight
+			// sides, corner cross-fade and background) uniformly without double-contributing.
+			Color scrim_edge = border_color_inner;
+			Rect2 scrim_inner_rect = infill_rect.grow_individual(scrim_recess, scrim_recess, scrim_recess, scrim_recess);
+			Vector<Point2> scrim_verts;
+			Vector<int> scrim_indices;
+			Vector<Color> scrim_colors;
+			// Apply the fade with a smoothstep alpha curve (drawn as nested concentric rings so
+			// each band still interpolates linearly between its two edges). The curve approaches
+			// the background color asymptotically instead of hitting it at a slope, so the
+			// innermost border pixels converge to essentially pure background and no hard line
+			// remains at the junction (a linear ramp always leaves a few-percent residual in the
+			// last pixel, which reads as a thin line against a contrasting background).
+			const int scrim_layers = 8;
+			auto lerp_rect = [](const Rect2 &p_a, const Rect2 &p_b, real_t p_t) -> Rect2 {
+				return Rect2(p_a.position.lerp(p_b.position, p_t), p_a.size.lerp(p_b.size, p_t));
+			};
+			for (int l = 0; l < scrim_layers; l++) {
+				const real_t t0 = (real_t)l / scrim_layers;
+				const real_t t1 = (real_t)(l + 1) / scrim_layers;
+				const real_t a0 = t0 * t0 * (3.0 - 2.0 * t0);
+				const real_t a1 = t1 * t1 * (3.0 - 2.0 * t1);
+				draw_rounded_rectangle(scrim_verts, scrim_indices, scrim_colors, border_style_rect, adapted_corner,
+						lerp_rect(border_style_rect, scrim_inner_rect, t0), lerp_rect(border_style_rect, scrim_inner_rect, t1),
+						Color(scrim_edge.r, scrim_edge.g, scrim_edge.b, a1), Color(scrim_edge.r, scrim_edge.g, scrim_edge.b, a0),
+						corner_detail, skew);
+			}
+			if (!scrim_indices.is_empty()) {
+				vs->canvas_item_add_triangle_array(p_canvas_item, scrim_indices, scrim_verts, scrim_colors, Vector<Point2>(), {}, {}, RID());
+			}
+		}
+	}
+
+	end_draw(p_canvas_item, p_rect);
+}
+
+void StyleBoxGradient::_bind_methods() {
+	ClassDB::bind_method(D_METHOD("set_modulate", "color"), &StyleBoxGradient::set_modulate);
+	ClassDB::bind_method(D_METHOD("get_modulate"), &StyleBoxGradient::get_modulate);
+
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_color", "color"), &StyleBoxGradient::set_inset_shadow_color);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_color"), &StyleBoxGradient::get_inset_shadow_color);
+
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_size", "size"), &StyleBoxGradient::set_inset_shadow_size);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_size"), &StyleBoxGradient::get_inset_shadow_size);
+
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_offset", "offset"), &StyleBoxGradient::set_inset_shadow_offset);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_offset"), &StyleBoxGradient::get_inset_shadow_offset);
+
+	ClassDB::bind_method(D_METHOD("set_side_border_texture", "margin", "border_texture"), &StyleBoxGradient::set_side_border_texture);
+	ClassDB::bind_method(D_METHOD("get_side_border_texture", "margin"), &StyleBoxGradient::get_side_border_texture);
+
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "modulate"), "set_modulate", "get_modulate");
+
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_left", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_side_border_texture", "get_side_border_texture", SIDE_LEFT);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_top", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_side_border_texture", "get_side_border_texture", SIDE_TOP);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_right", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_side_border_texture", "get_side_border_texture", SIDE_RIGHT);
+	ADD_PROPERTYI(PropertyInfo(Variant::OBJECT, "border_texture_bottom", PROPERTY_HINT_RESOURCE_TYPE, Texture2D::get_class_static()), "set_side_border_texture", "get_side_border_texture", SIDE_BOTTOM);
+
+	ADD_GROUP("Inset Shadow", "inset_shadow_");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "inset_shadow_color"), "set_inset_shadow_color", "get_inset_shadow_color");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "inset_shadow_size", PROPERTY_HINT_RANGE, "0,100,1,or_greater,suffix:px"), "set_inset_shadow_size", "get_inset_shadow_size");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "inset_shadow_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_inset_shadow_offset", "get_inset_shadow_offset");
+}

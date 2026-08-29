@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  style_box_flat.h                                                      */
+/*  style_box_gradient.h                                                  */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -30,35 +30,24 @@
 
 #pragma once
 
-#include "scene/resources/style_box.h"
+#include "scene/resources/style_box_flat.h"
 
+class Image;
 class Texture2D;
 
-class StyleBoxFlat : public StyleBox {
-	GDCLASS(StyleBoxFlat, StyleBox);
+class StyleBoxGradient : public StyleBoxFlat {
+	GDCLASS(StyleBoxGradient, StyleBoxFlat);
 
-protected:
-	Color bg_color = Color(0.6, 0.6, 0.6);
-	Color shadow_color = Color(0, 0, 0, 0.6);
-	Color border_color = Color(0.8, 0.8, 0.8);
+	Color modulate = Color(1, 1, 1, 1);
+	Color inset_shadow_color = Color(0, 0, 0, 0.6);
+	int inset_shadow_size = 0;
+	Point2 inset_shadow_offset;
 
-	real_t border_width[4] = {};
-	real_t expand_margin[4] = {};
-	real_t corner_radius[4] = {};
+	Ref<Texture2D> border_textures[4];
 
-	bool draw_center = true;
-	bool blend_border = false;
-	Vector2 skew;
-	bool anti_aliased = true;
-
-	int corner_detail = 8;
-	int shadow_size = 0;
-	Point2 shadow_offset;
-	real_t aa_size = 1;
-
-	Ref<Texture2D> bg_texture;
-	Ref<Texture2D> border_texture;
-	Ref<Texture2D> shadow_texture;
+	// Cached image of `bg_texture`, used to sample the background's edge color for the
+	// border blend. Invalidated whenever any texture changes.
+	mutable Ref<Image> bg_texture_image;
 
 	void _set_texture(Ref<Texture2D> *p_destination, const Ref<Texture2D> &p_texture);
 	void _texture_changed();
@@ -71,6 +60,9 @@ protected:
 public:
 	void set_bg_color(const Color &p_color);
 	Color get_bg_color() const;
+
+	void set_modulate(const Color &p_color);
+	Color get_modulate() const;
 
 	void set_border_color(const Color &p_color);
 	Color get_border_color() const;
@@ -112,11 +104,20 @@ public:
 	void set_shadow_offset(const Point2 &p_offset);
 	Point2 get_shadow_offset() const;
 
+	void set_inset_shadow_color(const Color &p_color);
+	Color get_inset_shadow_color() const;
+
+	void set_inset_shadow_size(const int &p_size);
+	int get_inset_shadow_size() const;
+
+	void set_inset_shadow_offset(const Point2 &p_offset);
+	Point2 get_inset_shadow_offset() const;
+
 	void set_bg_texture(Ref<Texture2D> p_texture);
 	Ref<Texture2D> get_bg_texture() const;
 
-	void set_border_texture(Ref<Texture2D> p_texture);
-	Ref<Texture2D> get_border_texture() const;
+	void set_side_border_texture(Side p_side, Ref<Texture2D> p_texture);
+	Ref<Texture2D> get_side_border_texture(Side p_side) const;
 
 	void set_shadow_texture(Ref<Texture2D> p_texture);
 	Ref<Texture2D> get_shadow_texture() const;
