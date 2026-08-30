@@ -35,12 +35,15 @@
 #include "core/variant/callable.h"
 #include "editor/inspector/editor_inspector.h"
 #include "editor/plugins/editor_plugin.h"
+#include "scene/gui/box_container.h"
+#include "scene/gui/button.h"
+#include "scene/gui/label.h"
+#include "scene/gui/line_edit.h"
+#include "scene/gui/option_button.h"
 #include "scene/resources/design_token_library.h"
 
-class Button;
 class HBoxContainer;
 class ItemList;
-class LineEdit;
 class PopupPanel;
 class DesignTokenInspectorPlugin;
 
@@ -87,6 +90,69 @@ public:
 			const String &p_path, const Variant::Type p_type, EditorProperty *p_sub_editor);
 };
 
+// Custom inspector control shown when a DesignTokenLibrary resource is selected.
+// It replaces the auto-generated token_N_* properties with a friendlier editor:
+// a top bar to add a new token (type selector | name | Add Token), and the
+// existing tokens grouped by type in collapsible inspector sections (sorted
+// alphabetically), each row showing name | value | delete. Names are renamed
+// with a pencil button like the theme editor (Edit -> confirm/cancel).
+class DesignTokenLibraryEditor : public VBoxContainer {
+	GDCLASS(DesignTokenLibraryEditor, VBoxContainer);
+
+	Ref<DesignTokenLibrary> library;
+
+	HBoxContainer *add_bar = nullptr;
+	OptionButton *type_selector = nullptr;
+	LineEdit *name_edit = nullptr;
+	Button *add_button = nullptr;
+
+	VBoxContainer *list_vbox = nullptr;
+
+	Label *empty_hint = nullptr;
+
+	// Icon buttons (pencil / confirm / cancel / delete). Theme icons can't be
+	// resolved until the control is inside the tree, so the buttons are
+	// collected on rebuild and their icons assigned in NOTIFICATION_THEME_CHANGED.
+	// Buttons created after the control is already inside the tree get their
+	// icon assigned immediately in _rebuild as well so they never appear blank
+	// after a structural refresh (e.g. add/remove or spurious value edit).
+	Vector<Button *> pencil_buttons;
+	Vector<Button *> confirm_buttons;
+	Vector<Button *> cancel_buttons;
+	Vector<Button *> delete_buttons;
+
+	// Structural version used to decide whether a rebuild is needed after the
+	// library emits "changed". Value edits keep the same version, so the
+	// editor (and any focused LineEdit) is preserved; only add/remove/type/
+	// rename changes bump the version (DesignTokenLibrary::structural_version).
+	uint64_t last_structural_version = 0;
+
+	void _rebuild();
+
+	void _on_library_changed();
+	void _on_add_pressed();
+	void _on_name_submitted(const String &p_text);
+	void _on_type_selected(int p_index);
+	void _on_edit_name_pressed(int p_idx, HBoxContainer *p_name_box);
+	void _on_confirm_name_submitted(const String &p_text, int p_idx, HBoxContainer *p_name_box);
+	void _on_confirm_name(int p_idx, HBoxContainer *p_name_box);
+	void _on_cancel_name(int p_idx, HBoxContainer *p_name_box);
+	void _on_delete_pressed(int p_row);
+	void _on_value_changed(const StringName &p_property, const Variant &p_value, const StringName &p_field, bool p_changing);
+
+	static Vector<Variant::Type> get_allowed_types();
+
+protected:
+	void _notification(int p_what);
+	static void _bind_methods();
+
+public:
+	void set_library(const Ref<DesignTokenLibrary> &p_library);
+
+	DesignTokenLibraryEditor();
+	~DesignTokenLibraryEditor();
+};
+
 // Inspector plugin: injects the chain button into editable properties and
 // propagates token changes to every object that is linked to a token.
 class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
@@ -124,8 +190,11 @@ class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
 	// every open scene on each token edit. New links always go through
 	// link_property()/register_link(), so a scanned object never needs a rescan.
 	HashSet<ObjectID> scanned_objects;
+	uint64_t last_scan_structural_version = 0;
+	bool scan_pending = false;
 
 	void _refresh_inspector();
+	void _scan_and_propagate_deferred();
 
 	// Token picker popup.
 	void _ensure_picker();
@@ -156,6 +225,7 @@ protected:
 
 public:
 	virtual bool can_handle(Object *p_object) override;
+	virtual void parse_begin(Object *p_object) override;
 	virtual bool parse_property(Object *p_object, const Variant::Type p_type,
 			const String &p_path, const PropertyHint p_hint,
 			const String &p_hint_text, const BitField<PropertyUsageFlags> p_usage,

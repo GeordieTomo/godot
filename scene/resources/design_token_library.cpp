@@ -45,6 +45,7 @@ void DesignTokenLibrary::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("set_token_value", "index", "value"), &DesignTokenLibrary::set_token_value);
 	ClassDB::bind_method(D_METHOD("get_token_value", "index"), &DesignTokenLibrary::get_token_value);
+	ClassDB::bind_method(D_METHOD("remove_token", "index"), &DesignTokenLibrary::remove_token);
 
 	ClassDB::bind_method(D_METHOD("get_token_value_by_name", "name"), &DesignTokenLibrary::get_token_value_by_name);
 	ClassDB::bind_method(D_METHOD("has_token", "name"), &DesignTokenLibrary::has_token);
@@ -146,10 +147,33 @@ bool DesignTokenLibrary::_property_get_revert(const StringName &p_name, Variant 
 	return false;
 }
 
+void DesignTokenLibrary::_rebuild_maps() {
+	name_to_index.clear();
+	for (int i = 0; i < tokens.size(); i++) {
+		if (!tokens[i].name.is_empty()) {
+			name_to_index[StringName(tokens[i].name)] = i;
+		}
+	}
+}
+
+void DesignTokenLibrary::_increment_version() {
+	structural_version++;
+}
+
 void DesignTokenLibrary::set_token_count(int p_count) {
 	ERR_FAIL_COND(p_count < 0);
 	if (tokens.size() != p_count) {
+		// Clear stale name entries that will be truncated.
+		if (p_count < tokens.size()) {
+			for (int i = p_count; i < tokens.size(); i++) {
+				if (!tokens[i].name.is_empty()) {
+					name_to_index.erase(StringName(tokens[i].name));
+				}
+			}
+		}
 		tokens.resize(p_count);
+		// New slots have empty name/type=NIL; map already consistent.
+		_increment_version();
 		notify_property_list_changed();
 		emit_changed();
 	}
@@ -162,14 +186,23 @@ int DesignTokenLibrary::get_token_count() const {
 void DesignTokenLibrary::set_token_indexed(int p_index, const StringName &p_field, const Variant &p_value) {
 	ERR_FAIL_INDEX(p_index, tokens.size());
 	bool changed = false;
+	bool structural = false;
 	if (p_field == "name") {
 		if (tokens[p_index].name != (String)p_value) {
 			String old_name = tokens[p_index].name;
-			tokens.write[p_index].name = p_value;
 			if (!old_name.is_empty()) {
-				emit_signal(SNAME("token_renamed"), old_name, (String)p_value);
+				name_to_index.erase(StringName(old_name));
+			}
+			String new_name = p_value;
+			tokens.write[p_index].name = new_name;
+			if (!new_name.is_empty()) {
+				name_to_index[StringName(new_name)] = p_index;
+			}
+			if (!old_name.is_empty()) {
+				emit_signal(SNAME("token_renamed"), old_name, new_name);
 			}
 			changed = true;
+			structural = true;
 		}
 	} else if (p_field == "type") {
 		if (tokens[p_index].type != (int)p_value) {
@@ -177,6 +210,7 @@ void DesignTokenLibrary::set_token_indexed(int p_index, const StringName &p_fiel
 			tokens.write[p_index].value = Variant();
 			notify_property_list_changed();
 			changed = true;
+			structural = true;
 		}
 	} else if (p_field == "value") {
 		if (tokens[p_index].value != p_value) {
@@ -185,6 +219,9 @@ void DesignTokenLibrary::set_token_indexed(int p_index, const StringName &p_fiel
 		}
 	}
 	if (changed) {
+		if (structural) {
+			_increment_version();
+		}
 		emit_changed();
 	}
 }
@@ -204,6 +241,7 @@ void DesignTokenLibrary::set_token_type(int p_index, int p_type) {
 	if (tokens[p_index].type != p_type) {
 		tokens.write[p_index].type = p_type;
 		tokens.write[p_index].value = Variant();
+		_increment_version();
 		notify_property_list_changed();
 		emit_changed();
 	}
@@ -225,7 +263,30 @@ Variant DesignTokenLibrary::get_token_value(int p_index) const {
 	return tokens[p_index].value;
 }
 
+void DesignTokenLibrary::remove_token(int p_index) {
+	ERR_FAIL_INDEX(p_index, tokens.size());
+	String old_name = tokens[p_index].name;
+	if (!old_name.is_empty()) {
+		name_to_index.erase(StringName(old_name));
+	}
+	tokens.remove_at(p_index);
+	// Indices shifted, rebuild map for correctness O(n) only on remove.
+	_rebuild_maps();
+	_increment_version();
+	notify_property_list_changed();
+	emit_changed();
+}
+
 Variant DesignTokenLibrary::get_token_value_by_name(const String &p_name) const {
+	const StringName key = StringName(p_name);
+	auto it = name_to_index.find(key);
+	if (it) {
+		int idx = it->value;
+		if (idx >= 0 && idx < tokens.size() && tokens[idx].name == p_name) {
+			return tokens[idx].value;
+		}
+	}
+	// Fallback linear scan for stale map (e.g., after deserialization).
 	for (int i = 0; i < tokens.size(); i++) {
 		if (tokens[i].name == p_name) {
 			return tokens[i].value;
@@ -235,6 +296,10 @@ Variant DesignTokenLibrary::get_token_value_by_name(const String &p_name) const 
 }
 
 bool DesignTokenLibrary::has_token(const String &p_name) const {
+	const StringName key = StringName(p_name);
+	if (name_to_index.has(key)) {
+		return true;
+	}
 	for (int i = 0; i < tokens.size(); i++) {
 		if (tokens[i].name == p_name) {
 			return true;

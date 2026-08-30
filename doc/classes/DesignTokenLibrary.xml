@@ -48,6 +48,12 @@
 			<description>
 			</description>
 		</method>
+		<method name="remove_token">
+			<return type="void" />
+			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
 		<method name="set_token_name">
 			<return type="void" />
 			<param index="0" name="index" type="int" />

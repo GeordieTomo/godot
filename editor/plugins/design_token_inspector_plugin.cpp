@@ -37,6 +37,7 @@
 #include "editor/docks/inspector_dock.h"
 #include "editor/editor_node.h"
 #include "editor/editor_string_names.h"
+#include "editor/inspector/editor_inspector.h"
 #include "editor/inspector/editor_properties.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
@@ -44,6 +45,7 @@
 #include "scene/gui/item_list.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
+#include "scene/gui/option_button.h"
 #include "scene/gui/popup.h"
 #include "scene/main/node.h"
 #include "scene/resources/theme.h"
@@ -61,6 +63,56 @@ static Dictionary _get_theme_links(const Object *p_object) {
 static void _set_theme_links(Object *p_object, const Dictionary &p_links) {
 	p_object->set_meta(THEME_LINKS_META_KEY, p_links);
 }
+
+// Swaps a token name cell between display mode (name label + pencil button) and
+// edit mode (line edit + confirm/cancel buttons), mirroring the theme editor's
+// rename row. Child layout: 0 Label, 1 LineEdit, 2 pencil, 3 confirm, 4 cancel.
+static void _set_name_edit_mode(HBoxContainer *p_name_box, bool p_edit, const String &p_current_name) {
+	Label *name_label = Object::cast_to<Label>(p_name_box->get_child(0));
+	LineEdit *name_line_edit = Object::cast_to<LineEdit>(p_name_box->get_child(1));
+	Button *pencil_button = Object::cast_to<Button>(p_name_box->get_child(2));
+	Button *confirm_button = Object::cast_to<Button>(p_name_box->get_child(3));
+	Button *cancel_button = Object::cast_to<Button>(p_name_box->get_child(4));
+	ERR_FAIL_NULL(name_label);
+	ERR_FAIL_NULL(name_line_edit);
+	ERR_FAIL_NULL(pencil_button);
+	ERR_FAIL_NULL(confirm_button);
+	ERR_FAIL_NULL(cancel_button);
+
+	if (p_edit) {
+		name_line_edit->set_text(p_current_name);
+		name_line_edit->set_visible(true);
+		confirm_button->set_visible(true);
+		cancel_button->set_visible(true);
+
+		name_label->set_visible(false);
+		pencil_button->set_visible(false);
+	} else {
+		name_label->set_text(p_current_name);
+		name_label->set_visible(true);
+		pencil_button->set_visible(true);
+
+		name_line_edit->set_visible(false);
+		confirm_button->set_visible(false);
+		cancel_button->set_visible(false);
+	}
+}
+
+// Alphabetical comparators used to sort categories and their token names.
+struct TokenTypeAlphCompare {
+	_FORCE_INLINE_ bool operator()(int p_a, int p_b) const {
+		return String(Variant::get_type_name((Variant::Type)p_a)).naturalnocasecmp_to(String(Variant::get_type_name((Variant::Type)p_b))) < 0;
+	}
+};
+
+struct TokenNameAlphCompare {
+	TokenNameAlphCompare(const Ref<DesignTokenLibrary> &p_library) :
+			library(p_library) {}
+	_FORCE_INLINE_ bool operator()(int p_a, int p_b) const {
+		return String(library->get_token_name(p_a)).naturalnocasecmp_to(String(library->get_token_name(p_b))) < 0;
+	}
+	const Ref<DesignTokenLibrary> library;
+};
 
 // ----------------------------------------------------------------
 // DesignTokenPropertyEditor
@@ -173,7 +225,7 @@ void DesignTokenPropertyEditor::_update_chain_visuals() {
 	}
 }
 
-DesignTokenPropertyEditor::DesignTokenPropertyEditor(const Ref<DesignTokenInspectorPlugin> &p_plugin, Object *p_object,
+	DesignTokenPropertyEditor::DesignTokenPropertyEditor(const Ref<DesignTokenInspectorPlugin> &p_plugin, Object *p_object,
 		const String &p_path, const Variant::Type p_type, EditorProperty *p_sub_editor) {
 	plugin = p_plugin;
 	prop_type = p_type;
@@ -195,7 +247,7 @@ DesignTokenPropertyEditor::DesignTokenPropertyEditor(const Ref<DesignTokenInspec
 	sub_editor->set_selectable(false);
 	sub_editor->set_use_folding(is_using_folding());
 	sub_editor->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-	sub_editor->connect(SNAME("property_changed"), callable_mp((EditorProperty *)this, &EditorProperty::emit_changed));
+	sub_editor->connect(SNAME("property_changed"), callable_mp((EditorProperty *)this, &EditorProperty::emit_changed), CONNECT_DEFERRED);
 	sub_editor->connect(SNAME("object_id_selected"), callable_mp(this, &DesignTokenPropertyEditor::_object_id_selected));
 	content->add_child(sub_editor);
 
@@ -290,7 +342,10 @@ void DesignTokenInspectorPlugin::unlink_property(Object *p_object, const String 
 void DesignTokenInspectorPlugin::_refresh_inspector() {
 	EditorInspector *inspector = InspectorDock::get_inspector_singleton();
 	if (inspector) {
-		inspector->update_tree();
+		// Defer to avoid freeing the EditorProperty that is currently emitting
+		// "property_changed" / "color_changed" while we are inside
+		// library->emit_changed -> _on_library_changed -> update_tree().
+		callable_mp(inspector, &EditorInspector::update_tree).call_deferred();
 	}
 }
 
@@ -317,6 +372,17 @@ bool DesignTokenInspectorPlugin::can_handle(Object *p_object) {
 	return p_object != nullptr;
 }
 
+void DesignTokenInspectorPlugin::parse_begin(Object *p_object) {
+	DesignTokenLibrary *lib = Object::cast_to<DesignTokenLibrary>(p_object);
+	if (!lib) {
+		return;
+	}
+
+	DesignTokenLibraryEditor *editor = memnew(DesignTokenLibraryEditor);
+	editor->set_library(Ref<DesignTokenLibrary>(lib));
+	add_custom_control(editor);
+}
+
 bool DesignTokenInspectorPlugin::parse_property(Object *p_object, const Variant::Type p_type,
 		const String &p_path, const PropertyHint p_hint,
 		const String &p_hint_text, const BitField<PropertyUsageFlags> p_usage,
@@ -325,9 +391,12 @@ bool DesignTokenInspectorPlugin::parse_property(Object *p_object, const Variant:
 		return false;
 	}
 
-	// Properties of the library itself must not be linkable.
+	// Properties of the library itself are rendered by the dedicated
+	// DesignTokenLibraryEditor control (added in parse_begin). Returning true
+	// here hides the auto-generated token_N_* properties from the default
+	// inspector.
 	if (Object::cast_to<DesignTokenLibrary>(p_object)) {
-		return false;
+		return true;
 	}
 
 	if (p_type == Variant::NIL || p_type == Variant::OBJECT || p_type == Variant::CALLABLE ||
@@ -594,16 +663,61 @@ void DesignTokenInspectorPlugin::_on_picker_unlink() {
 	picker_anchor = nullptr;
 }
 
+void DesignTokenInspectorPlugin::_scan_and_propagate_deferred() {
+	scan_pending = false;
+	if (library.is_null()) {
+		return;
+	}
+	size_t before = linked_properties.size();
+	_scan_edited_scenes_links();
+	if (linked_properties.size() == before) {
+		return;
+	}
+	// New links discovered, propagate current values to them.
+	for (const KeyValue<ObjectID, HashSet<StringName>> &E : linked_properties) {
+		Object *obj = ObjectDB::get_instance(E.key);
+		if (!obj) {
+			continue;
+		}
+		for (const StringName &prop : E.value) {
+			String token_name = get_linked_token(obj, prop);
+			if (token_name.is_empty()) {
+				continue;
+			}
+			Variant value = library->get_token_value_by_name(token_name);
+			if (value.get_type() != Variant::NIL) {
+				obj->set(prop, value);
+				if (Theme *theme = Object::cast_to<Theme>(obj)) {
+					theme->emit_changed();
+				}
+			}
+		}
+	}
+}
+
 void DesignTokenInspectorPlugin::_on_library_changed() {
 	if (library.is_null()) {
 		return;
 	}
 
-	// Find links saved in object metadata from a previous editor session. The
-	// inspector only registers links for objects that have been displayed since
-	// startup, so without this token changes would be silently dropped for
-	// linked nodes/resources that weren't selected yet.
-	_scan_edited_scenes_links();
+	// Only scan for previously saved links when structural version changes
+	// (add/remove/rename/type). Value-only edits keep the same structural
+	// version, so scanning every drag would walk the entire scene tree for
+	// no reason. Defer the scan to avoid blocking live drags.
+	uint64_t cur_ver = library->get_structural_version();
+	if (cur_ver != last_scan_structural_version) {
+		last_scan_structural_version = cur_ver;
+		if (!scan_pending) {
+			scan_pending = true;
+			callable_mp(this, &DesignTokenInspectorPlugin::_scan_and_propagate_deferred).call_deferred();
+		}
+		// Still do an immediate lightweight scan of already-known objects
+		// via the incremental register_link path; the full scene walk is deferred.
+	} else if (linked_properties.is_empty() && scanned_objects.is_empty()) {
+		// First edit after startup with no prior scan – do it now to bootstrap.
+		_scan_edited_scenes_links();
+		last_scan_structural_version = cur_ver;
+	}
 
 	// Propagate token values to every object with linked properties.
 	List<ObjectID> stale_ids;
@@ -637,11 +751,13 @@ void DesignTokenInspectorPlugin::_on_library_changed() {
 
 	// Only rebuild the inspector if the currently edited object actually has
 	// linked properties, so editing the library itself isn't disrupted.
+	// Defer to avoid freeing the EditorProperty/ColorPickerButton that is
+	// currently emitting "property_changed" -> library->set -> emit_changed.
 	EditorInspector *inspector = InspectorDock::get_inspector_singleton();
 	if (inspector) {
 		Object *inspected = inspector->get_edited_object();
 		if (inspected && linked_properties.has(inspected->get_instance_id())) {
-			inspector->update_tree();
+			callable_mp(inspector, &EditorInspector::update_tree).call_deferred();
 		}
 	}
 }
@@ -770,6 +886,8 @@ void DesignTokenInspectorPlugin::set_library(const Ref<DesignTokenLibrary> &p_li
 
 	// Discover links saved in object metadata from previous editor sessions so
 	// propagation and chain-button state work before the first token edit.
+	last_scan_structural_version = library.is_valid() ? library->get_structural_version() : 0;
+	scan_pending = false;
 	_scan_edited_scenes_links();
 }
 
@@ -875,4 +993,386 @@ DesignTokenEditorPlugin::DesignTokenEditorPlugin() {
 	}
 
 	add_inspector_plugin(inspector_plugin);
+}
+
+// ---------------------------------------------------------------------------
+// DesignTokenLibraryEditor
+// ---------------------------------------------------------------------------
+
+Vector<Variant::Type> DesignTokenLibraryEditor::get_allowed_types() {
+	Vector<Variant::Type> types;
+	for (int t = 0; t < Variant::VARIANT_MAX; t++) {
+		Variant::Type type = (Variant::Type)t;
+		if (type == Variant::NIL || type == Variant::OBJECT || type == Variant::CALLABLE ||
+				type == Variant::SIGNAL || type == Variant::RID) {
+			continue;
+		}
+		types.push_back(type);
+	}
+	return types;
+}
+
+void DesignTokenLibraryEditor::_bind_methods() {
+}
+
+void DesignTokenLibraryEditor::_notification(int p_what) {
+	switch (p_what) {
+		case NOTIFICATION_ENTER_TREE: {
+			if (type_selector && type_selector->get_item_count() == 0) {
+				Vector<Variant::Type> types = get_allowed_types();
+				for (int i = 0; i < types.size(); i++) {
+					type_selector->add_item(Variant::get_type_name(types[i]), (int)types[i]);
+				}
+				type_selector->select(0);
+			}
+		} break;
+		case NOTIFICATION_THEME_CHANGED: {
+			// Rows are built before entering the tree, so the editor theme icon
+			// textures aren't available until the theme has been propagated here.
+			for (Button *b : pencil_buttons) {
+				b->set_button_icon(get_editor_theme_icon(SNAME("Edit")));
+			}
+			for (Button *b : confirm_buttons) {
+				b->set_button_icon(get_editor_theme_icon(SNAME("ImportCheck")));
+			}
+			for (Button *b : cancel_buttons) {
+				b->set_button_icon(get_editor_theme_icon(SNAME("ImportFail")));
+			}
+			for (Button *b : delete_buttons) {
+				b->set_button_icon(get_editor_theme_icon(SNAME("Remove")));
+			}
+		} break;
+	}
+}
+
+DesignTokenLibraryEditor::DesignTokenLibraryEditor() {
+	add_bar = memnew(HBoxContainer);
+	add_child(add_bar);
+
+	type_selector = memnew(OptionButton);
+	add_bar->add_child(type_selector);
+	type_selector->connect(SceneStringName(item_selected), callable_mp(this, &DesignTokenLibraryEditor::_on_type_selected));
+
+	name_edit = memnew(LineEdit);
+	name_edit->set_placeholder(TTR("Token name"));
+	name_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	add_bar->add_child(name_edit);
+	name_edit->connect(SceneStringName(text_submitted), callable_mp(this, &DesignTokenLibraryEditor::_on_name_submitted));
+
+	add_button = memnew(Button);
+	add_button->set_text(TTR("Add Token"));
+	add_bar->add_child(add_button);
+	add_button->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_add_pressed));
+
+	list_vbox = memnew(VBoxContainer);
+	list_vbox->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	add_child(list_vbox);
+
+	empty_hint = memnew(Label);
+	empty_hint->set_text(TTR("No design tokens yet. Add one above."));
+	empty_hint->set_modulate(Color(1, 1, 1, 0.6));
+	add_child(empty_hint);
+}
+
+DesignTokenLibraryEditor::~DesignTokenLibraryEditor() {
+	if (library.is_valid()) {
+		library->disconnect("changed", callable_mp(this, &DesignTokenLibraryEditor::_on_library_changed));
+	}
+}
+
+void DesignTokenLibraryEditor::set_library(const Ref<DesignTokenLibrary> &p_library) {
+	if (library.is_valid()) {
+		library->disconnect("changed", callable_mp(this, &DesignTokenLibraryEditor::_on_library_changed));
+	}
+	library = p_library;
+	if (library.is_valid()) {
+		library->connect("changed", callable_mp(this, &DesignTokenLibraryEditor::_on_library_changed));
+	}
+	last_structural_version = library.is_valid() ? library->get_structural_version() : 0;
+	_rebuild();
+}
+
+void DesignTokenLibraryEditor::_on_library_changed() {
+	if (library.is_null()) {
+		return;
+	}
+	uint64_t ver = library->get_structural_version();
+	if (ver == last_structural_version) {
+		return;
+	}
+	last_structural_version = ver;
+	// Defer rebuild so we never delete the EditorProperty (e.g. ColorPickerButton)
+	// that is currently emitting "property_changed" -> _on_value_changed -> emit_changed.
+	// Direct rebuild would free the emitting control mid-signal and crash.
+	if (is_inside_tree()) {
+		callable_mp(this, &DesignTokenLibraryEditor::_rebuild).call_deferred();
+	} else {
+		_rebuild();
+	}
+}
+
+void DesignTokenLibraryEditor::_rebuild() {
+	for (int i = list_vbox->get_child_count() - 1; i >= 0; i--) {
+		Node *c = list_vbox->get_child(i);
+		list_vbox->remove_child(c);
+		memdelete(c);
+	}
+	pencil_buttons.clear();
+	confirm_buttons.clear();
+	cancel_buttons.clear();
+	delete_buttons.clear();
+
+	if (library.is_null() || library->get_token_count() == 0) {
+		empty_hint->show();
+		last_structural_version = library.is_valid() ? library->get_structural_version() : 0;
+		return;
+	}
+	empty_hint->hide();
+
+	HashMap<int, Vector<int>> by_type;
+	for (int i = 0; i < library->get_token_count(); i++) {
+		by_type[library->get_token_type(i)].push_back(i);
+	}
+
+	// Categories sorted alphabetically by their display name.
+	Vector<int> types_sorted;
+	for (const KeyValue<int, Vector<int>> &E : by_type) {
+		types_sorted.push_back(E.key);
+	}
+	types_sorted.sort_custom<TokenTypeAlphCompare>();
+
+	for (int t : types_sorted) {
+		Variant::Type vtype = (Variant::Type)t;
+		String type_name = Variant::get_type_name(vtype);
+
+		// Use the inspector's own collapsible section header. Fold state is kept
+		// on the library object, so it survives rebuilds. On first display the
+		// category defaults to expanded (without marking the resource edited).
+		if (!library->editor_is_section_unfolded(type_name)) {
+			library->editor_set_section_unfold(type_name, true, true);
+		}
+		EditorInspectorSection *section = memnew(EditorInspectorSection);
+		section->setup(type_name, type_name, library.ptr(), Color(), true);
+		list_vbox->add_child(section);
+
+		VBoxContainer *rows = section->get_vbox();
+
+		// Token names sorted alphabetically within each category.
+		Vector<int> indexes = by_type[t];
+		indexes.sort_custom<TokenNameAlphCompare>(library);
+
+		for (int idx : indexes) {
+			HBoxContainer *row = memnew(HBoxContainer);
+			row->add_theme_constant_override("separation", 4);
+			rows->add_child(row);
+
+			// Name cell: label + pencil, or line edit + confirm/cancel while
+			// renaming (same pattern as the theme editor). Child layout:
+			// 0 Label, 1 LineEdit, 2 pencil, 3 confirm, 4 cancel.
+			HBoxContainer *name_box = memnew(HBoxContainer);
+			name_box->add_theme_constant_override("separation", 2);
+			name_box->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			name_box->set_stretch_ratio(1.0);
+			row->add_child(name_box);
+
+			Label *name_label = memnew(Label);
+			name_label->set_text(library->get_token_name(idx));
+			name_label->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			name_label->set_clip_text(true);
+			name_box->add_child(name_label);
+
+			LineEdit *row_name_edit = memnew(LineEdit);
+			row_name_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+			name_box->add_child(row_name_edit);
+			row_name_edit->hide();
+			row_name_edit->connect(SceneStringName(text_submitted), callable_mp(this, &DesignTokenLibraryEditor::_on_confirm_name_submitted).bind(idx, name_box));
+
+			Button *pencil = memnew(Button);
+			pencil->set_flat(true);
+			pencil->set_tooltip_text(TTR("Rename token"));
+			pencil->set_custom_minimum_size(Size2(20, 20));
+			if (is_inside_tree()) {
+				pencil->set_button_icon(get_editor_theme_icon(SNAME("Edit")));
+			}
+			name_box->add_child(pencil);
+			pencil_buttons.push_back(pencil);
+			pencil->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_edit_name_pressed).bind(idx, name_box));
+
+			Button *confirm = memnew(Button);
+			confirm->set_flat(true);
+			confirm->set_tooltip_text(TTR("Confirm token rename"));
+			confirm->set_custom_minimum_size(Size2(20, 20));
+			if (is_inside_tree()) {
+				confirm->set_button_icon(get_editor_theme_icon(SNAME("ImportCheck")));
+			}
+			name_box->add_child(confirm);
+			confirm_buttons.push_back(confirm);
+			confirm->hide();
+			confirm->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_confirm_name).bind(idx, name_box));
+
+			Button *cancel = memnew(Button);
+			cancel->set_flat(true);
+			cancel->set_tooltip_text(TTR("Cancel token rename"));
+			cancel->set_custom_minimum_size(Size2(20, 20));
+			if (is_inside_tree()) {
+				cancel->set_button_icon(get_editor_theme_icon(SNAME("ImportFail")));
+			}
+			name_box->add_child(cancel);
+			cancel_buttons.push_back(cancel);
+			cancel->hide();
+			cancel->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_cancel_name).bind(idx, name_box));
+
+			Variant::Type vt = (Variant::Type)library->get_token_type(idx);
+			if (vt != Variant::NIL) {
+				EditorProperty *vp = EditorInspectorDefaultPlugin::get_editor_for_property(
+						library.ptr(), vt, "token_" + itos(idx) + "_value",
+						PropertyHint::PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR, false);
+				if (vp) {
+					vp->set_object_and_property(library.ptr(), "token_" + itos(idx) + "_value");
+					vp->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+					// The default editor only emits "property_changed"; unlike when
+					// hosted in a real EditorInspector nothing writes the value back
+					// to the object, so route it to the library here.
+					// Use CONNECT_DEFERRED to avoid freeing the EditorProperty
+					// (e.g. ColorPickerButton) while its "property_changed" /
+					// "color_changed" signal is still being emitted -> library
+					// emit_changed -> inspector/theme rebuild would delete the emitter.
+					vp->connect(SNAME("property_changed"), callable_mp(this, &DesignTokenLibraryEditor::_on_value_changed), CONNECT_DEFERRED);
+					row->add_child(vp);
+					vp->update_property();
+				}
+			} else {
+				Label *ph = memnew(Label);
+				ph->set_text("—");
+				row->add_child(ph);
+			}
+
+			Button *del = memnew(Button);
+			del->set_flat(true);
+			del->set_tooltip_text(TTR("Remove Token"));
+			del->set_custom_minimum_size(Size2(20, 20));
+			if (is_inside_tree()) {
+				del->set_button_icon(get_editor_theme_icon(SNAME("Remove")));
+			}
+			row->add_child(del);
+			delete_buttons.push_back(del);
+			del->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_delete_pressed).bind(idx));
+		}
+	}
+
+	// Keep the structural version in sync so the next "changed" emission
+	// from a pure value edit (e.g. dragging a ColorPicker) does not trigger a
+	// spurious rebuild. Rebuilding while the EditorProperty is still emitting
+	// "property_changed" would free the emitting control and crash.
+	last_structural_version = library->get_structural_version();
+}
+
+void DesignTokenLibraryEditor::_on_add_pressed() {
+	if (library.is_null()) {
+		return;
+	}
+	String name = name_edit->get_text().strip_edges();
+	if (name.is_empty()) {
+		return;
+	}
+	if (library->has_token(name)) {
+		return;
+	}
+
+	Variant::Type t = (Variant::Type)type_selector->get_selected_id();
+	int idx = library->get_token_count();
+	library->set_token_count(idx + 1);
+	library->set_token_type(idx, (int)t);
+	Variant def;
+	Callable::CallError ce;
+	Variant::construct(t, def, nullptr, 0, ce);
+	if (ce.error != Callable::CallError::CALL_OK) {
+		def = Variant();
+	}
+	library->set_token_value(idx, def);
+	library->set_token_name(idx, name);
+	name_edit->clear();
+}
+
+void DesignTokenLibraryEditor::_on_name_submitted(const String &p_text) {
+	_on_add_pressed();
+}
+
+void DesignTokenLibraryEditor::_on_type_selected(int p_index) {
+	// The selected type is read when adding a token; nothing else to do here.
+}
+
+void DesignTokenLibraryEditor::_on_edit_name_pressed(int p_idx, HBoxContainer *p_name_box) {
+	ERR_FAIL_NULL(p_name_box);
+	if (library.is_null()) {
+		return;
+	}
+	_set_name_edit_mode(p_name_box, true, library->get_token_name(p_idx));
+	LineEdit *row_name_edit = Object::cast_to<LineEdit>(p_name_box->get_child(1));
+	ERR_FAIL_NULL(row_name_edit);
+	row_name_edit->grab_focus();
+	row_name_edit->select_all();
+}
+
+void DesignTokenLibraryEditor::_on_confirm_name_submitted(const String &p_text, int p_idx, HBoxContainer *p_name_box) {
+	_on_confirm_name(p_idx, p_name_box);
+}
+
+void DesignTokenLibraryEditor::_on_confirm_name(int p_idx, HBoxContainer *p_name_box) {
+	ERR_FAIL_NULL(p_name_box);
+	if (library.is_null()) {
+		return;
+	}
+
+	// Like the theme editor: keep the old name when the new one is empty,
+	// unchanged, or would collide with an existing token.
+	LineEdit *row_name_edit = Object::cast_to<LineEdit>(p_name_box->get_child(1));
+	ERR_FAIL_NULL(row_name_edit);
+
+	const String new_name = row_name_edit->get_text().strip_edges();
+	const String old_name = library->get_token_name(p_idx);
+	if (new_name.is_empty() || new_name == old_name || library->has_token(new_name)) {
+		_set_name_edit_mode(p_name_box, false, old_name);
+		return;
+	}
+
+	// Show the confirmed name in the label before updating the library: the
+	// rename makes the plugin refresh the inspector, which rebuilds the tree
+	// (destroying these widgets), so nothing below may touch them again.
+	_set_name_edit_mode(p_name_box, false, new_name);
+	library->set_token_name(p_idx, new_name);
+
+	// The inspector refresh rebuilds and re-sorts on rename; this is a fallback
+	// when that refresh is skipped (e.g. inspector hidden/not visible). Deferred
+	// so the emitting button is not freed while its "pressed" signal is being
+	// delivered.
+	callable_mp(this, &DesignTokenLibraryEditor::_rebuild).call_deferred();
+}
+
+void DesignTokenLibraryEditor::_on_cancel_name(int p_idx, HBoxContainer *p_name_box) {
+	ERR_FAIL_NULL(p_name_box);
+	if (library.is_null()) {
+		return;
+	}
+	_set_name_edit_mode(p_name_box, false, library->get_token_name(p_idx));
+}
+
+void DesignTokenLibraryEditor::_on_delete_pressed(int p_row) {
+	if (library.is_null()) {
+		return;
+	}
+	// Deferred so the row (and the button emitting this signal) isn't freed
+	// while the "pressed" signal is still being emitted.
+	library->call_deferred("remove_token", p_row);
+}
+
+void DesignTokenLibraryEditor::_on_value_changed(const StringName &p_property, const Variant &p_value, const StringName &p_field, bool p_changing) {
+	if (library.is_null()) {
+		return;
+	}
+	// Write the edited value back through the property setter so it is stored in
+	// the library (which emits "changed", marking the resource dirty and letting
+	// the inspector plugin propagate the value to linked objects). Committing on
+	// every change keeps typing in text-style editors responsive.
+	library->set(p_property, p_value);
 }

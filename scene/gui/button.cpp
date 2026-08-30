@@ -479,7 +479,7 @@ void Button::_notification(int p_what) {
 				real_t text_scale = StyleBox::get_animated_value(SNAME("text_scale"), style->get_text_scale(), anim_id);
 				bool text_scaled = !Math::is_equal_approx(text_scale, (real_t)1.0);
 				if (text_scaled) {
-					Vector2 anchor = text_ofs + text_buf->get_size() * 0.5;
+					Vector2 anchor = size * 0.5;
 					Transform2D tf = Transform2D().translated(-anchor).scaled(Size2(text_scale, text_scale)).translated(anchor);
 					RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, tf);
 				}

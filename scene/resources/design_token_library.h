@@ -31,6 +31,7 @@
 #pragma once
 
 #include "core/io/resource.h"
+#include "core/templates/hash_map.h"
 
 class DesignTokenLibrary : public Resource {
 	GDCLASS(DesignTokenLibrary, Resource);
@@ -44,6 +45,11 @@ public:
 
 private:
 	Vector<Token> tokens;
+	HashMap<StringName, int> name_to_index;
+	uint64_t structural_version = 0;
+
+	void _rebuild_maps();
+	void _increment_version();
 
 protected:
 	static void _bind_methods();
@@ -66,10 +72,14 @@ public:
 	void set_token_value(int p_index, const Variant &p_value);
 	Variant get_token_value(int p_index) const;
 
+	void remove_token(int p_index);
+
 	void set_token_indexed(int p_index, const StringName &p_field, const Variant &p_value);
 
 	Variant get_token_value_by_name(const String &p_name) const;
 	bool has_token(const String &p_name) const;
 	Vector<String> get_token_names() const;
 	Vector<String> get_token_names_for_type(Variant::Type p_type) const;
+
+	uint64_t get_structural_version() const { return structural_version; }
 };
