@@ -31,7 +31,9 @@
 #pragma once
 
 #include "core/io/resource.h"
+#include "core/math/expression.h"
 #include "core/templates/hash_map.h"
+#include "core/templates/hash_set.h"
 
 class DesignTokenLibrary : public Resource {
 	GDCLASS(DesignTokenLibrary, Resource);
@@ -41,15 +43,33 @@ public:
 		String name;
 		int type = Variant::NIL;
 		Variant value;
+		bool is_formula = false;
+		String formula;
+		// Runtime cache – not serialized, recomputed on load.
+		mutable Ref<Expression> compiled;
+		mutable Vector<String> deps;
+		mutable Variant cached_value;
+		mutable bool dirty = true;
+		mutable String last_error;
 	};
 
 private:
-	Vector<Token> tokens;
+	mutable Vector<Token> tokens;
 	HashMap<StringName, int> name_to_index;
 	uint64_t structural_version = 0;
 
+	// Reverse deps: token name -> set of formula token indices that depend on it.
+	HashMap<StringName, HashSet<int>> dependents;
+
 	void _rebuild_maps();
 	void _increment_version();
+	void _rebuild_dependents();
+	bool _is_valid_token_name(const String &p_name) const;
+	bool _is_whitelisted_utility(const StringName &p_func) const;
+	Error _compile_formula(int p_index, String &r_error);
+	void _invalidate_all_formula_caches();
+	Variant _evaluate_token_recursive(int p_index, HashSet<int> &r_visiting, String &r_error) const;
+	Variant _get_evaluated_value(int p_index, String *r_error = nullptr) const;
 
 protected:
 	static void _bind_methods();
@@ -75,6 +95,17 @@ public:
 	void remove_token(int p_index);
 
 	void set_token_indexed(int p_index, const StringName &p_field, const Variant &p_value);
+
+	// Formula API.
+	void set_token_is_formula(int p_index, bool p_is_formula);
+	bool is_token_formula(int p_index) const;
+	void set_token_formula(int p_index, const String &p_formula);
+	String get_token_formula(int p_index) const;
+	String get_token_error(int p_index) const;
+	bool is_token_valid(int p_index) const;
+
+	static bool is_valid_token_name_static(const String &p_name);
+	bool is_valid_token_name(const String &p_name) const { return is_valid_token_name_static(p_name); }
 
 	Variant get_token_value_by_name(const String &p_name) const;
 	bool has_token(const String &p_name) const;

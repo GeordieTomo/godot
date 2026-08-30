@@ -37,6 +37,7 @@
 #include "editor/plugins/editor_plugin.h"
 #include "scene/gui/box_container.h"
 #include "scene/gui/button.h"
+#include "scene/gui/check_box.h"
 #include "scene/gui/label.h"
 #include "scene/gui/line_edit.h"
 #include "scene/gui/option_button.h"
@@ -104,6 +105,8 @@ class DesignTokenLibraryEditor : public VBoxContainer {
 	HBoxContainer *add_bar = nullptr;
 	OptionButton *type_selector = nullptr;
 	LineEdit *name_edit = nullptr;
+	CheckBox *formula_check = nullptr;
+	LineEdit *formula_edit = nullptr;
 	Button *add_button = nullptr;
 
 	VBoxContainer *list_vbox = nullptr;
@@ -139,6 +142,9 @@ class DesignTokenLibraryEditor : public VBoxContainer {
 	void _on_cancel_name(int p_idx, HBoxContainer *p_name_box);
 	void _on_delete_pressed(int p_row);
 	void _on_value_changed(const StringName &p_property, const Variant &p_value, const StringName &p_field, bool p_changing);
+	void _on_formula_check_toggled(bool p_pressed);
+	void _on_formula_submitted(const String &p_text, int p_idx);
+	void _on_formula_toggle_pressed(int p_idx);
 
 	static Vector<Variant::Type> get_allowed_types();
 

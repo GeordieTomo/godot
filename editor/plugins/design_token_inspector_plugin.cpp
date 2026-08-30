@@ -1047,6 +1047,7 @@ void DesignTokenLibraryEditor::_notification(int p_what) {
 
 DesignTokenLibraryEditor::DesignTokenLibraryEditor() {
 	add_bar = memnew(HBoxContainer);
+	add_bar->add_theme_constant_override(SNAME("separation"), 4);
 	add_child(add_bar);
 
 	type_selector = memnew(OptionButton);
@@ -1054,10 +1055,23 @@ DesignTokenLibraryEditor::DesignTokenLibraryEditor() {
 	type_selector->connect(SceneStringName(item_selected), callable_mp(this, &DesignTokenLibraryEditor::_on_type_selected));
 
 	name_edit = memnew(LineEdit);
-	name_edit->set_placeholder(TTR("Token name"));
+	name_edit->set_placeholder(TTR("Token name [_a-zA-Z][_a-zA-Z0-9]*"));
 	name_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
 	add_bar->add_child(name_edit);
 	name_edit->connect(SceneStringName(text_submitted), callable_mp(this, &DesignTokenLibraryEditor::_on_name_submitted));
+
+	formula_check = memnew(CheckBox);
+	formula_check->set_text(TTR("Formula"));
+	formula_check->set_tooltip_text(TTR("Create as formula token (expression of other tokens)."));
+	add_bar->add_child(formula_check);
+	formula_check->connect(SNAME("toggled"), callable_mp(this, &DesignTokenLibraryEditor::_on_formula_check_toggled));
+
+	formula_edit = memnew(LineEdit);
+	formula_edit->set_placeholder(TTR("Formula e.g. a * b + c"));
+	formula_edit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+	formula_edit->hide();
+	add_bar->add_child(formula_edit);
+	formula_edit->connect(SceneStringName(text_submitted), callable_mp(this, &DesignTokenLibraryEditor::_on_name_submitted));
 
 	add_button = memnew(Button);
 	add_button->set_text(TTR("Add Token"));
@@ -1111,6 +1125,34 @@ void DesignTokenLibraryEditor::_on_library_changed() {
 	}
 }
 
+void DesignTokenLibraryEditor::_on_formula_check_toggled(bool p_pressed) {
+	if (formula_edit) {
+		formula_edit->set_visible(p_pressed);
+	}
+	if (p_pressed) {
+		formula_edit->grab_focus();
+	}
+}
+
+void DesignTokenLibraryEditor::_on_formula_submitted(const String &p_text, int p_idx) {
+	if (library.is_null()) {
+		return;
+	}
+	ERR_FAIL_INDEX(p_idx, library->get_token_count());
+	library->set_token_formula(p_idx, p_text);
+	// Deferred rebuild to avoid freeing LineEdit mid-signal.
+	callable_mp(this, &DesignTokenLibraryEditor::_rebuild).call_deferred();
+}
+
+void DesignTokenLibraryEditor::_on_formula_toggle_pressed(int p_idx) {
+	if (library.is_null()) {
+		return;
+	}
+	ERR_FAIL_INDEX(p_idx, library->get_token_count());
+	bool is_formula = library->is_token_formula(p_idx);
+	library->set_token_is_formula(p_idx, !is_formula);
+}
+
 void DesignTokenLibraryEditor::_rebuild() {
 	for (int i = list_vbox->get_child_count() - 1; i >= 0; i--) {
 		Node *c = list_vbox->get_child(i);
@@ -1131,7 +1173,9 @@ void DesignTokenLibraryEditor::_rebuild() {
 
 	HashMap<int, Vector<int>> by_type;
 	for (int i = 0; i < library->get_token_count(); i++) {
-		by_type[library->get_token_type(i)].push_back(i);
+		// For formula with auto type, group by inferred type.
+		int t = library->get_token_type(i);
+		by_type[t].push_back(i);
 	}
 
 	// Categories sorted alphabetically by their display name.
@@ -1222,29 +1266,62 @@ void DesignTokenLibraryEditor::_rebuild() {
 			cancel->hide();
 			cancel->connect(SceneStringName(pressed), callable_mp(this, &DesignTokenLibraryEditor::_on_cancel_name).bind(idx, name_box));
 
-			Variant::Type vt = (Variant::Type)library->get_token_type(idx);
-			if (vt != Variant::NIL) {
-				EditorProperty *vp = EditorInspectorDefaultPlugin::get_editor_for_property(
-						library.ptr(), vt, "token_" + itos(idx) + "_value",
-						PropertyHint::PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR, false);
-				if (vp) {
-					vp->set_object_and_property(library.ptr(), "token_" + itos(idx) + "_value");
-					vp->set_h_size_flags(Control::SIZE_EXPAND_FILL);
-					// The default editor only emits "property_changed"; unlike when
-					// hosted in a real EditorInspector nothing writes the value back
-					// to the object, so route it to the library here.
-					// Use CONNECT_DEFERRED to avoid freeing the EditorProperty
-					// (e.g. ColorPickerButton) while its "property_changed" /
-					// "color_changed" signal is still being emitted -> library
-					// emit_changed -> inspector/theme rebuild would delete the emitter.
-					vp->connect(SNAME("property_changed"), callable_mp(this, &DesignTokenLibraryEditor::_on_value_changed), CONNECT_DEFERRED);
-					row->add_child(vp);
-					vp->update_property();
+			bool is_formula = library->is_token_formula(idx);
+			// Formula toggle button (fx).
+			Button *fx = memnew(Button);
+			fx->set_flat(true);
+			fx->set_toggle_mode(true);
+			fx->set_pressed(is_formula);
+			fx->set_tooltip_text(TTR("Toggle formula mode"));
+			fx->set_text("fx");
+			fx->set_custom_minimum_size(Size2(28, 20));
+			fx->connect(SNAME("pressed"), callable_mp(this, &DesignTokenLibraryEditor::_on_formula_toggle_pressed).bind(idx));
+			row->add_child(fx);
+			if (is_formula) {
+				LineEdit *fedit = memnew(LineEdit);
+				fedit->set_text(library->get_token_formula(idx));
+				fedit->set_placeholder(TTR("Formula e.g. a * b + c"));
+				fedit->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+				fedit->connect(SceneStringName(text_submitted), callable_mp(this, &DesignTokenLibraryEditor::_on_formula_submitted).bind(idx));
+				row->add_child(fedit);
+				// Preview / error
+				String err = library->get_token_error(idx);
+				if (!err.is_empty()) {
+					Label *err_label = memnew(Label);
+					err_label->set_text(err);
+					err_label->add_theme_color_override(SNAME("font_color"), Color(1, 0.3, 0.3));
+					err_label->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+					row->add_child(err_label);
+				} else {
+					Variant v = library->get_token_value(idx);
+					Label *preview = memnew(Label);
+					if (v.get_type() != Variant::NIL) {
+						preview->set_text(v.stringify().left(40));
+					} else {
+						preview->set_text("—");
+					}
+					preview->set_modulate(Color(1, 1, 1, 0.6));
+					preview->set_h_size_flags(Control::SIZE_SHRINK_CENTER);
+					row->add_child(preview);
 				}
 			} else {
-				Label *ph = memnew(Label);
-				ph->set_text("—");
-				row->add_child(ph);
+				Variant::Type vt = (Variant::Type)library->get_token_type(idx);
+				if (vt != Variant::NIL) {
+					EditorProperty *vp = EditorInspectorDefaultPlugin::get_editor_for_property(
+							library.ptr(), vt, "token_" + itos(idx) + "_value",
+							PropertyHint::PROPERTY_HINT_NONE, "", PROPERTY_USAGE_EDITOR, false);
+					if (vp) {
+						vp->set_object_and_property(library.ptr(), "token_" + itos(idx) + "_value");
+						vp->set_h_size_flags(Control::SIZE_EXPAND_FILL);
+						vp->connect(SNAME("property_changed"), callable_mp(this, &DesignTokenLibraryEditor::_on_value_changed), CONNECT_DEFERRED);
+						row->add_child(vp);
+						vp->update_property();
+					}
+				} else {
+					Label *ph = memnew(Label);
+					ph->set_text("—");
+					row->add_child(ph);
+				}
 			}
 
 			Button *del = memnew(Button);
@@ -1275,21 +1352,37 @@ void DesignTokenLibraryEditor::_on_add_pressed() {
 	if (name.is_empty()) {
 		return;
 	}
+	if (!DesignTokenLibrary::is_valid_token_name_static(name)) {
+		return;
+	}
 	if (library->has_token(name)) {
 		return;
 	}
 
-	Variant::Type t = (Variant::Type)type_selector->get_selected_id();
+	bool is_formula = formula_check && formula_check->is_pressed();
 	int idx = library->get_token_count();
 	library->set_token_count(idx + 1);
-	library->set_token_type(idx, (int)t);
-	Variant def;
-	Callable::CallError ce;
-	Variant::construct(t, def, nullptr, 0, ce);
-	if (ce.error != Callable::CallError::CALL_OK) {
-		def = Variant();
+	if (is_formula) {
+		library->set_token_type(idx, Variant::NIL); // auto
+		library->set_token_is_formula(idx, true);
+		String formula = formula_edit ? formula_edit->get_text().strip_edges() : String();
+		if (!formula.is_empty()) {
+			library->set_token_formula(idx, formula);
+		}
+		if (formula_edit) {
+			formula_edit->clear();
+		}
+	} else {
+		Variant::Type t = (Variant::Type)type_selector->get_selected_id();
+		library->set_token_type(idx, (int)t);
+		Variant def;
+		Callable::CallError ce;
+		Variant::construct(t, def, nullptr, 0, ce);
+		if (ce.error != Callable::CallError::CALL_OK) {
+			def = Variant();
+		}
+		library->set_token_value(idx, def);
 	}
-	library->set_token_value(idx, def);
 	library->set_token_name(idx, name);
 	name_edit->clear();
 }
