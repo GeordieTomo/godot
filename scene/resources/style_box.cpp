@@ -593,7 +593,7 @@ void StyleBox::_bind_methods() {
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "content_margin_bottom", PROPERTY_HINT_RANGE, "-1,2048,1,suffix:px"), "set_content_margin", "get_content_margin", SIDE_BOTTOM);
 
 	ADD_GROUP("Text", "text_");
-	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scale", PROPERTY_HINT_RANGE, "0.001,10,0.001,or_greater"), "set_text_scale", "get_text_scale");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "text_scale", PROPERTY_HINT_RANGE, "0.001,10,0.001,or_greater"), "set_text_scale", "get_text_scale");
 
 	ADD_GROUP("Animation", "animation_");
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "animation_duration_in", PROPERTY_HINT_RANGE, "0,1,0.001,or_less,or_greater"), "set_animation_duration", "get_animation_duration", PHASE_NORMAL);

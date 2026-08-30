@@ -178,6 +178,11 @@
 				Sets the [member resource_path] to [param path], potentially overriding an existing cache entry for this path. Further attempts to load an overridden resource by path will instead return this resource.
 			</description>
 		</method>
+		<method name="update_inherited_state">
+			<return type="bool" />
+			<description>
+			</description>
+		</method>
 	</methods>
 	<members>
 		<member name="resource_inherits_state" type="Resource" setter="set_inherits_state" getter="get_inherits_state">
