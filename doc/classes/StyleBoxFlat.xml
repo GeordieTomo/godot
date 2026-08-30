@@ -62,6 +62,19 @@
 				Sets the border width to [param width] pixels for all sides.
 			</description>
 		</method>
+		<method name="get_border_texture" qualifiers="const">
+			<return type="Texture2D" />
+			<description>
+				Returns the [Texture2D] used for all four borders at once, or [code]null[/code] if no such texture is set. To set a different texture per border, use [member border_texture_top], [member border_texture_bottom], [member border_texture_left], and [member border_texture_right] instead.
+			</description>
+		</method>
+		<method name="set_border_texture">
+			<return type="void" />
+			<param index="0" name="border_texture" type="Texture2D" />
+			<description>
+				Sets a single [Texture2D] that is used for all four borders (top, bottom, left, and right) at once. It is stretched along each border and modulated by [member border_color]. To set a different texture for each side, use [member border_texture_top], [member border_texture_bottom], [member border_texture_left], and [member border_texture_right] instead.
+			</description>
+		</method>
 		<method name="set_corner_radius">
 			<return type="void" />
 			<param index="0" name="corner" type="int" enum="Corner" />

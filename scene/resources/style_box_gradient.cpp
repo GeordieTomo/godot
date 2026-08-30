@@ -581,24 +581,33 @@ inline void draw_border_texture_strip(Vector<Point2> &r_verts, Vector<int> &r_in
 	// background's interior edge; the fade scrim reaches full background color at the same
 	// line, so no border color bleeds through at the inner edge.
 	const Rect2 inner_rect = p_style_rect.grow_individual(-p_border[SIDE_LEFT], -p_border[SIDE_TOP],
-			-p_border[SIDE_RIGHT], -p_border[SIDE_BOTTOM]).grow_individual(p_inner_recess, p_inner_recess,
-			p_inner_recess, p_inner_recess);
+												 -p_border[SIDE_RIGHT], -p_border[SIDE_BOTTOM])
+									 .grow_individual(p_inner_recess, p_inner_recess,
+											 p_inner_recess, p_inner_recess);
 
 	auto corner_point = [](const Rect2 &p_rect, int p_corner) -> Point2 {
 		switch (p_corner) {
-			case CORNER_TOP_LEFT: return p_rect.position;
-			case CORNER_TOP_RIGHT: return Point2(p_rect.position.x + p_rect.size.x, p_rect.position.y);
-			case CORNER_BOTTOM_RIGHT: return p_rect.position + p_rect.size;
-			default: return Point2(p_rect.position.x, p_rect.position.y + p_rect.size.y);
+			case CORNER_TOP_LEFT:
+				return p_rect.position;
+			case CORNER_TOP_RIGHT:
+				return Point2(p_rect.position.x + p_rect.size.x, p_rect.position.y);
+			case CORNER_BOTTOM_RIGHT:
+				return p_rect.position + p_rect.size;
+			default:
+				return Point2(p_rect.position.x, p_rect.position.y + p_rect.size.y);
 		}
 	};
 
 	auto corner_sign = [](int p_corner) -> Vector2 {
 		switch (p_corner) {
-			case CORNER_TOP_LEFT: return Vector2(1, 1);
-			case CORNER_TOP_RIGHT: return Vector2(-1, 1);
-			case CORNER_BOTTOM_RIGHT: return Vector2(-1, -1);
-			default: return Vector2(1, -1);
+			case CORNER_TOP_LEFT:
+				return Vector2(1, 1);
+			case CORNER_TOP_RIGHT:
+				return Vector2(-1, 1);
+			case CORNER_BOTTOM_RIGHT:
+				return Vector2(-1, -1);
+			default:
+				return Vector2(1, -1);
 		}
 	};
 
@@ -1109,10 +1118,10 @@ void StyleBoxGradient::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		// points along that side's inward direction. The shadow's outer edge always stays
 		// aligned with the background shape; only its reach changes per side.
 		const real_t hole_depth[4] = {
-			inset_shadow_offset.x,  // SIDE_LEFT
-			inset_shadow_offset.y,  // SIDE_TOP
+			inset_shadow_offset.x, // SIDE_LEFT
+			inset_shadow_offset.y, // SIDE_TOP
 			-inset_shadow_offset.x, // SIDE_RIGHT
-			-inset_shadow_offset.y  // SIDE_BOTTOM
+			-inset_shadow_offset.y // SIDE_BOTTOM
 		};
 
 		real_t fade_depth[4];

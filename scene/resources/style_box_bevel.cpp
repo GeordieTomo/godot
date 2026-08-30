@@ -31,9 +31,9 @@
 #include "style_box_bevel.h"
 
 #include "core/config/engine.h"
+#include "core/math/math_funcs.h"
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
-#include "core/math/math_funcs.h"
 #include "scene/resources/texture.h"
 #include "servers/rendering/rendering_server.h"
 #include "servers/text/text_server.h"
