@@ -96,6 +96,15 @@ Point2 StyleBox::get_offset() const {
 	return Point2(get_margin(SIDE_LEFT), get_margin(SIDE_TOP));
 }
 
+void StyleBox::set_text_scale(real_t p_scale) {
+	text_scale = p_scale;
+	emit_changed();
+}
+
+real_t StyleBox::get_text_scale() const {
+	return text_scale;
+}
+
 void StyleBox::begin_animation_group(StringName p_id) {
 	animation_id = p_id;
 	cached_state = nullptr;
@@ -538,6 +547,9 @@ void StyleBox::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_margin", "margin"), &StyleBox::get_margin);
 	ClassDB::bind_method(D_METHOD("get_offset"), &StyleBox::get_offset);
 
+	ClassDB::bind_method(D_METHOD("set_text_scale", "scale"), &StyleBox::set_text_scale);
+	ClassDB::bind_method(D_METHOD("get_text_scale"), &StyleBox::get_text_scale);
+
 	ClassDB::bind_method(D_METHOD("set_transform_pivot", "pivot"), &StyleBox::set_transform_pivot);
 	ClassDB::bind_method(D_METHOD("get_transform_pivot"), &StyleBox::get_transform_pivot);
 
@@ -579,6 +591,9 @@ void StyleBox::_bind_methods() {
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "content_margin_top", PROPERTY_HINT_RANGE, "-1,2048,1,suffix:px"), "set_content_margin", "get_content_margin", SIDE_TOP);
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "content_margin_right", PROPERTY_HINT_RANGE, "-1,2048,1,suffix:px"), "set_content_margin", "get_content_margin", SIDE_RIGHT);
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "content_margin_bottom", PROPERTY_HINT_RANGE, "-1,2048,1,suffix:px"), "set_content_margin", "get_content_margin", SIDE_BOTTOM);
+
+	ADD_GROUP("Text", "text_");
+	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "scale", PROPERTY_HINT_RANGE, "0.001,10,0.001,or_greater"), "set_text_scale", "get_text_scale");
 
 	ADD_GROUP("Animation", "animation_");
 	ADD_PROPERTYI(PropertyInfo(Variant::FLOAT, "animation_duration_in", PROPERTY_HINT_RANGE, "0,1,0.001,or_less,or_greater"), "set_animation_duration", "get_animation_duration", PHASE_NORMAL);

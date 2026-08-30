@@ -423,6 +423,33 @@ Ref<Curve> StyleBoxBevel::get_bevel_blend_curve() const {
 	return bevel_blend_curve;
 }
 
+void StyleBoxBevel::set_inset_shadow_color(const Color &p_color) {
+	inset_shadow_color = p_color;
+	emit_changed();
+}
+
+Color StyleBoxBevel::get_inset_shadow_color() const {
+	return inset_shadow_color;
+}
+
+void StyleBoxBevel::set_inset_shadow_size(int p_size) {
+	inset_shadow_size = p_size;
+	emit_changed();
+}
+
+int StyleBoxBevel::get_inset_shadow_size() const {
+	return inset_shadow_size;
+}
+
+void StyleBoxBevel::set_inset_shadow_offset(const Point2 &p_offset) {
+	inset_shadow_offset = p_offset;
+	emit_changed();
+}
+
+Point2 StyleBoxBevel::get_inset_shadow_offset() const {
+	return inset_shadow_offset;
+}
+
 void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	// Sets up the draw-time animation state (enter/exit transitions, transforms).
 	begin_draw(p_canvas_item, p_rect);
@@ -469,7 +496,8 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 
 	bool draw_border = (border_width_animated[0] > 0) || (border_width_animated[1] > 0) || (border_width_animated[2] > 0) || (border_width_animated[3] > 0);
 	bool draw_shadow = (shadow_size_animated > 0);
-	if (!draw_border && !draw_center && !draw_shadow) {
+	bool draw_inset_shadow = (inset_shadow_size > 0);
+	if (!draw_border && !draw_center && !draw_shadow && !draw_inset_shadow) {
 		return;
 	}
 
@@ -614,11 +642,13 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	Vector<int> fi;
 	Vector<int> bi;
 	Vector<int> si;
+	Vector<int> ii;
 
 	bool share_indices = bg_texture.is_null() && border_texture.is_null() && shadow_texture.is_null();
 	Vector<int> &fill_indices = share_indices ? indices : fi;
 	Vector<int> &border_indices = share_indices ? indices : bi;
 	Vector<int> &shadow_indices = share_indices ? indices : si;
+	Vector<int> &inset_indices = ii;
 
 	// Create shadow.
 	if (draw_shadow) {
@@ -769,6 +799,49 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 	}
 
+	// Create inset shadow.
+	if (draw_inset_shadow) {
+		const real_t hole_depth[4] = {
+			inset_shadow_offset.x, // SIDE_LEFT
+			inset_shadow_offset.y, // SIDE_TOP
+			-inset_shadow_offset.x, // SIDE_RIGHT
+			-inset_shadow_offset.y // SIDE_BOTTOM
+		};
+
+		real_t fade_depth[4];
+		bool any_fade = false;
+		for (int i = 0; i < 4; i++) {
+			fade_depth[i] = MAX(inset_shadow_size + hole_depth[i], 0);
+			any_fade |= fade_depth[i] > 0;
+		}
+
+		if (any_fade) {
+			Color inset_shadow_color_modulated = inset_shadow_color;
+			Color inset_color_transparent = Color(inset_shadow_color_modulated.r, inset_shadow_color_modulated.g, inset_shadow_color_modulated.b, 0);
+			Rect2 fade_outer = infill_rect;
+			Rect2 fade_inner = infill_rect.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP], -fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
+
+			Color inset_inner_colors[8];
+			Color inset_outer_colors[8];
+			for (int i = 0; i < 8; i++) {
+				inset_inner_colors[i] = inset_color_transparent;
+				inset_outer_colors[i] = inset_shadow_color_modulated;
+			}
+
+			if (fade_inner.size.width > 0 && fade_inner.size.height > 0) {
+				bevel_draw_ring(verts, inset_indices, colors, style_rect, adapted_corner,
+						fade_outer, fade_inner, inset_inner_colors, inset_outer_colors, corner_detail, skew);
+			} else {
+				Color solid_colors[8];
+				for (int i = 0; i < 8; i++) {
+					solid_colors[i] = inset_shadow_color_modulated;
+				}
+				bevel_draw_ring(verts, inset_indices, colors, style_rect, adapted_corner,
+						infill_rect, infill_rect, solid_colors, solid_colors, corner_detail, skew, true);
+			}
+		}
+	}
+
 	// Compute UV coordinates.
 	Rect2 uv_rect = style_rect.grow(aa_on ? aa_size_scaled : 0);
 	uvs.resize(verts.size());
@@ -792,6 +865,10 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		}
 	} else {
 		vs->canvas_item_add_triangle_array(p_canvas_item, indices, verts, colors, uvs);
+	}
+
+	if (draw_inset_shadow) {
+		vs->canvas_item_add_triangle_array(p_canvas_item, inset_indices, verts, colors, uvs);
 	}
 
 	end_draw(p_canvas_item, p_rect);
@@ -831,6 +908,13 @@ void StyleBoxBevel::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_bevel_blend_curve", "curve"), &StyleBoxBevel::set_bevel_blend_curve);
 	ClassDB::bind_method(D_METHOD("get_bevel_blend_curve"), &StyleBoxBevel::get_bevel_blend_curve);
 
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_color", "color"), &StyleBoxBevel::set_inset_shadow_color);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_color"), &StyleBoxBevel::get_inset_shadow_color);
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_size", "size"), &StyleBoxBevel::set_inset_shadow_size);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_size"), &StyleBoxBevel::get_inset_shadow_size);
+	ClassDB::bind_method(D_METHOD("set_inset_shadow_offset", "offset"), &StyleBoxBevel::set_inset_shadow_offset);
+	ClassDB::bind_method(D_METHOD("get_inset_shadow_offset"), &StyleBoxBevel::get_inset_shadow_offset);
+
 	ADD_GROUP("Bevel", "bevel_");
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_style", PROPERTY_HINT_RANGE, "-1,1,0.01"), "set_bevel_style", "get_bevel_style");
 	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "bevel_lighting_color"), "set_bevel_lighting_color", "get_bevel_lighting_color");
@@ -841,4 +925,9 @@ void StyleBoxBevel::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "bevel_max_intensity_angle_ratio", PROPERTY_HINT_RANGE, "0.05,1,0.01"), "set_bevel_max_intensity_angle_ratio", "get_bevel_max_intensity_angle_ratio");
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "bevel_blend_function", PROPERTY_HINT_ENUM, "Linear,Smoothstep,Ease In,Ease Out,Ease In Out,Curve"), "set_bevel_blend_function", "get_bevel_blend_function");
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "bevel_blend_curve", PROPERTY_HINT_RESOURCE_TYPE, "Curve"), "set_bevel_blend_curve", "get_bevel_blend_curve");
+
+	ADD_GROUP("Inset Shadow", "inset_shadow_");
+	ADD_PROPERTY(PropertyInfo(Variant::COLOR, "inset_shadow_color"), "set_inset_shadow_color", "get_inset_shadow_color");
+	ADD_PROPERTY(PropertyInfo(Variant::INT, "inset_shadow_size", PROPERTY_HINT_RANGE, "0,100,1,or_greater,suffix:px"), "set_inset_shadow_size", "get_inset_shadow_size");
+	ADD_PROPERTY(PropertyInfo(Variant::VECTOR2, "inset_shadow_offset", PROPERTY_HINT_NONE, "suffix:px"), "set_inset_shadow_offset", "get_inset_shadow_offset");
 }

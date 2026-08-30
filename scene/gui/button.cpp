@@ -35,6 +35,7 @@
 #include "scene/gui/dialogs.h"
 #include "scene/theme/theme_db.h"
 #include "servers/display/accessibility_server.h"
+#include "servers/rendering/rendering_server.h"
 
 Size2 Button::get_minimum_size() const {
 	Ref<Texture2D> _icon = icon;
@@ -474,6 +475,15 @@ void Button::_notification(int p_what) {
 				int outline_size = theme_cache.outline_size;
 				Vector2 outline_offset = theme_cache.font_outline_offset;
 				text_ofs = StyleBox::get_animated_value(SNAME("text_ofs"), text_ofs, anim_id);
+
+				real_t text_scale = StyleBox::get_animated_value(SNAME("text_scale"), style->get_text_scale(), anim_id);
+				bool text_scaled = !Math::is_equal_approx(text_scale, (real_t)1.0);
+				if (text_scaled) {
+					Vector2 anchor = text_ofs + text_buf->get_size() * 0.5;
+					Transform2D tf = Transform2D().translated(-anchor).scaled(Size2(text_scale, text_scale)).translated(anchor);
+					RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, tf);
+				}
+
 				if (font_outline_color.a > 0.0f) {
 					if (!outline_offset.is_zero_approx()) {
 						text_buf->draw(ci, text_ofs + outline_offset, font_outline_color);
@@ -483,6 +493,10 @@ void Button::_notification(int p_what) {
 					}
 				}
 				text_buf->draw(ci, text_ofs, font_color);
+
+				if (text_scaled) {
+					RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, Transform2D());
+				}
 			}
 		} break;
 	}

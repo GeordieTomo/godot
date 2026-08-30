@@ -101,6 +101,8 @@ class StyleBox : public Resource {
 	DrawTransform exit_transform;
 	bool should_animate_rect = true;
 
+	real_t text_scale = 1.0;
+
 	static void redraw_animating_nodes();
 	static void setup_animation_frame(Control *p_node);
 
@@ -164,6 +166,9 @@ public:
 
 	float get_margin(Side p_side) const;
 	Point2 get_offset() const;
+
+	void set_text_scale(real_t p_scale);
+	real_t get_text_scale() const;
 
 	virtual void draw(RID p_canvas_item, const Rect2 &p_rect) const;
 	virtual Rect2 get_draw_rect(const Rect2 &p_rect) const;

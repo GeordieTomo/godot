@@ -205,6 +205,9 @@
 			The top margin for the contents of this style box. Increasing this value reduces the space available to the contents from the top.
 			Refer to [member content_margin_bottom] for extra considerations.
 		</member>
+		<member name="text_scale" type="float" setter="set_text_scale" getter="get_text_scale" default="1.0">
+			The scale applied to text drawn inside controls that use this stylebox (such as [Button]). A value of [code]1.0[/code] leaves the text at its normal size, while a lower value shrinks it and a higher value enlarges it. When a control is in a different state, the corresponding stylebox can define a different value, and the change is animated using that stylebox's transition animation settings.
+		</member>
 	</members>
 	<constants>
 		<constant name="PHASE_NORMAL" value="0" enum="AnimationPhase">

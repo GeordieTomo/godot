@@ -58,6 +58,10 @@ private:
 	BevelBlendFunction bevel_blend_function = BEVEL_BLEND_LINEAR;
 	Ref<Curve> bevel_blend_curve;
 
+	Color inset_shadow_color = Color(0, 0, 0, 0.6);
+	int inset_shadow_size = 0;
+	Point2 inset_shadow_offset;
+
 protected:
 	static void _bind_methods();
 
@@ -88,6 +92,15 @@ public:
 
 	void set_bevel_blend_curve(Ref<Curve> p_curve);
 	Ref<Curve> get_bevel_blend_curve() const;
+
+	void set_inset_shadow_color(const Color &p_color);
+	Color get_inset_shadow_color() const;
+
+	void set_inset_shadow_size(int p_size);
+	int get_inset_shadow_size() const;
+
+	void set_inset_shadow_offset(const Point2 &p_offset);
+	Point2 get_inset_shadow_offset() const;
 
 	virtual void draw(RID p_canvas_item, const Rect2 &p_rect) const override;
 };
