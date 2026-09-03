@@ -142,6 +142,7 @@ void DesignTokenLibrary::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_token_value", "index", "value"), &DesignTokenLibrary::set_token_value);
 	ClassDB::bind_method(D_METHOD("get_token_value", "index"), &DesignTokenLibrary::get_token_value);
 	ClassDB::bind_method(D_METHOD("remove_token", "index"), &DesignTokenLibrary::remove_token);
+	ClassDB::bind_method(D_METHOD("insert_token", "index", "name", "type", "value", "is_formula", "formula"), &DesignTokenLibrary::insert_token, DEFVAL(false), DEFVAL(String()));
 
 	ClassDB::bind_method(D_METHOD("set_token_is_formula", "index", "is_formula"), &DesignTokenLibrary::set_token_is_formula);
 	ClassDB::bind_method(D_METHOD("is_token_formula", "index"), &DesignTokenLibrary::is_token_formula);
@@ -330,7 +331,6 @@ Error DesignTokenLibrary::_compile_formula(int p_index, String &r_error) {
 	// Scan for identifiers and function calls.
 	Vector<String> deps;
 	HashSet<String> deps_set;
-	HashSet<String> func_candidates;
 
 	// Helper to check allowed constants.
 	HashSet<String> allowed_consts;
@@ -794,6 +794,37 @@ void DesignTokenLibrary::remove_token(int p_index) {
 	_increment_version();
 	notify_property_list_changed();
 	emit_changed();
+}
+
+void DesignTokenLibrary::insert_token(int p_index, const String &p_name, int p_type, const Variant &p_value, bool p_is_formula, const String &p_formula) {
+	ERR_FAIL_COND(p_index < 0 || p_index > tokens.size());
+	Token tok;
+	tok.name = p_name;
+	tok.type = p_type;
+	tok.value = p_value;
+	tok.is_formula = p_is_formula;
+	tok.formula = p_formula;
+	tok.dirty = true;
+	if (!p_name.is_empty()) {
+		ERR_FAIL_COND_MSG(has_token(p_name), vformat("Token name '%s' already exists.", p_name));
+	}
+	if (!p_name.is_empty() && !_is_valid_token_name(p_name)) {
+		ERR_FAIL_MSG(vformat("Invalid token name '%s': must match [_a-zA-Z][_a-zA-Z0-9]*.", p_name));
+	}
+	tokens.insert(p_index, tok);
+	_rebuild_maps();
+	if (p_is_formula && !p_formula.is_empty()) {
+		String err;
+		_compile_formula(p_index, err);
+	}
+	_rebuild_dependents();
+	_invalidate_all_formula_caches();
+	_increment_version();
+	notify_property_list_changed();
+	emit_changed();
+	if (!p_name.is_empty()) {
+		emit_signal(SNAME("token_renamed"), String(), p_name);
+	}
 }
 
 void DesignTokenLibrary::set_token_is_formula(int p_index, bool p_is_formula) {

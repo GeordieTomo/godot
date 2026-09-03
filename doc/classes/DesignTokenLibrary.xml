@@ -7,6 +7,18 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="get_token_error" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="get_token_formula" qualifiers="const">
+			<return type="String" />
+			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
 		<method name="get_token_name" qualifiers="const">
 			<return type="String" />
 			<param index="0" name="index" type="int" />
@@ -48,9 +60,52 @@
 			<description>
 			</description>
 		</method>
+		<method name="insert_token">
+			<return type="void" />
+			<param index="0" name="index" type="int" />
+			<param index="1" name="name" type="String" />
+			<param index="2" name="type" type="int" />
+			<param index="3" name="value" type="Variant" />
+			<param index="4" name="is_formula" type="bool" default="false" />
+			<param index="5" name="formula" type="String" default="&quot;&quot;" />
+			<description>
+			</description>
+		</method>
+		<method name="is_token_formula" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="is_token_valid" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="is_valid_token_name" qualifiers="const">
+			<return type="bool" />
+			<param index="0" name="name" type="String" />
+			<description>
+			</description>
+		</method>
 		<method name="remove_token">
 			<return type="void" />
 			<param index="0" name="index" type="int" />
+			<description>
+			</description>
+		</method>
+		<method name="set_token_formula">
+			<return type="void" />
+			<param index="0" name="index" type="int" />
+			<param index="1" name="formula" type="String" />
+			<description>
+			</description>
+		</method>
+		<method name="set_token_is_formula">
+			<return type="void" />
+			<param index="0" name="index" type="int" />
+			<param index="1" name="is_formula" type="bool" />
 			<description>
 			</description>
 		</method>
@@ -72,50 +127,6 @@
 			<return type="void" />
 			<param index="0" name="index" type="int" />
 			<param index="1" name="value" type="Variant" />
-			<description>
-			</description>
-		</method>
-		<method name="set_token_is_formula">
-			<return type="void" />
-			<param index="0" name="index" type="int" />
-			<param index="1" name="is_formula" type="bool" />
-			<description>
-			</description>
-		</method>
-		<method name="is_token_formula" qualifiers="const">
-			<return type="bool" />
-			<param index="0" name="index" type="int" />
-			<description>
-			</description>
-		</method>
-		<method name="set_token_formula">
-			<return type="void" />
-			<param index="0" name="index" type="int" />
-			<param index="1" name="formula" type="String" />
-			<description>
-			</description>
-		</method>
-		<method name="get_token_formula" qualifiers="const">
-			<return type="String" />
-			<param index="0" name="index" type="int" />
-			<description>
-			</description>
-		</method>
-		<method name="get_token_error" qualifiers="const">
-			<return type="String" />
-			<param index="0" name="index" type="int" />
-			<description>
-			</description>
-		</method>
-		<method name="is_token_valid" qualifiers="const">
-			<return type="bool" />
-			<param index="0" name="index" type="int" />
-			<description>
-			</description>
-		</method>
-		<method name="is_valid_token_name" qualifiers="const">
-			<return type="bool" />
-			<param index="0" name="name" type="String" />
 			<description>
 			</description>
 		</method>

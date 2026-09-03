@@ -33,6 +33,7 @@
 #include "core/templates/hash_map.h"
 #include "core/templates/hash_set.h"
 #include "core/variant/callable.h"
+#include "editor/docks/editor_dock.h"
 #include "editor/inspector/editor_inspector.h"
 #include "editor/plugins/editor_plugin.h"
 #include "scene/gui/box_container.h"
@@ -123,6 +124,7 @@ class DesignTokenLibraryEditor : public VBoxContainer {
 	Vector<Button *> confirm_buttons;
 	Vector<Button *> cancel_buttons;
 	Vector<Button *> delete_buttons;
+	Vector<Button *> fx_buttons;
 
 	// Structural version used to decide whether a rebuild is needed after the
 	// library emits "changed". Value edits keep the same version, so the
@@ -130,9 +132,16 @@ class DesignTokenLibraryEditor : public VBoxContainer {
 	// rename changes bump the version (DesignTokenLibrary::structural_version).
 	uint64_t last_structural_version = 0;
 
+	// Drag handling for colour and other continuous editors: store the value
+	// at drag start so the final undo can revert to the original.
+	HashMap<int, Variant> drag_start_values;
+
 	void _rebuild();
 
 	void _on_library_changed();
+	void _refresh_value_editors();
+	bool _is_any_color_picker_popup_visible() const;
+	bool _is_any_color_picker_dirty() const;
 	void _on_add_pressed();
 	void _on_name_submitted(const String &p_text);
 	void _on_type_selected(int p_index);
@@ -269,11 +278,15 @@ public:
 	~DesignTokenInspectorPlugin();
 };
 
+class DesignTokenEditor;
+
 class DesignTokenEditorPlugin : public EditorPlugin {
 	GDCLASS(DesignTokenEditorPlugin, EditorPlugin);
 
 	Ref<DesignTokenInspectorPlugin> inspector_plugin;
 	String loaded_library_path;
+
+	DesignTokenEditor *design_token_editor = nullptr;
 
 	void _on_project_settings_changed();
 
@@ -283,5 +296,43 @@ protected:
 
 public:
 	virtual String get_plugin_name() const override { return "DesignTokens"; }
+	virtual void edit(Object *p_object) override;
+	virtual bool handles(Object *p_object) const override;
+	virtual void make_visible(bool p_visible) override;
+	virtual bool can_auto_hide() const override;
 	DesignTokenEditorPlugin();
+	~DesignTokenEditorPlugin();
+};
+
+// Bottom dock for DesignTokenLibrary, mirroring ThemeEditor (EditorDock).
+class DesignTokenEditor : public EditorDock {
+	GDCLASS(DesignTokenEditor, EditorDock);
+
+	friend class DesignTokenEditorPlugin;
+	DesignTokenEditorPlugin *plugin = nullptr;
+
+	Ref<DesignTokenLibrary> library;
+
+	Label *library_name = nullptr;
+	Button *edit_button = nullptr;
+	Button *close_button = nullptr;
+
+	DesignTokenLibraryEditor *library_editor = nullptr;
+
+	void _update_library_name(const String &p_name = String());
+	void _dock_closed_cbk();
+	void _scene_closed(const String &p_path);
+	void _resource_saved(const Ref<Resource> &p_resource);
+	void _files_moved(const String &p_old_path, const String &p_new_path);
+	void _save_button_cbk(bool p_save_as);
+	void _edit_button_cbk();
+
+protected:
+	void _notification(int p_what);
+
+public:
+	void edit(const Ref<DesignTokenLibrary> &p_library);
+	Ref<DesignTokenLibrary> get_edited_library() const { return library; }
+
+	DesignTokenEditor();
 };

@@ -93,6 +93,7 @@ public:
 	Variant get_token_value(int p_index) const;
 
 	void remove_token(int p_index);
+	void insert_token(int p_index, const String &p_name, int p_type, const Variant &p_value, bool p_is_formula = false, const String &p_formula = String());
 
 	void set_token_indexed(int p_index, const StringName &p_field, const Variant &p_value);
 
