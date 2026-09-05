@@ -57,6 +57,9 @@
 #include "scene/gui/scroll_container.h"
 #include "scene/gui/separator.h"
 #include "scene/main/node.h"
+#include "scene/resources/font.h"
+#include "scene/resources/style_box.h"
+#include "scene/resources/texture.h"
 #include "scene/resources/theme.h"
 
 // Links for theme items are stored in a single Dictionary metadata entry:
@@ -1000,6 +1003,47 @@ void DesignTokenInspectorPlugin::_discover_object_links(Object *p_object) {
 	if (!props.is_empty()) {
 		linked_properties[id] = props;
 	}
+
+	// Linked values often live on sub-resources (e.g. a Button's
+	// theme_override StyleBox or a Label's LabelSettings), not on the node
+	// itself. Recurse into Resource properties so those links are registered
+	// without having to open each resource in the inspector first.
+	_discover_resource_properties(p_object);
+}
+
+void DesignTokenInspectorPlugin::_discover_resource_properties(Object *p_object) {
+	ERR_FAIL_NULL(p_object);
+
+	// The library itself never holds token links; skip it to avoid noise.
+	if (Object::cast_to<DesignTokenLibrary>(p_object)) {
+		return;
+	}
+
+	List<PropertyInfo> plist;
+	p_object->get_property_list(&plist);
+	for (const PropertyInfo &pi : plist) {
+		if (pi.type != Variant::OBJECT) {
+			continue;
+		}
+		// Scripts can't hold token links; skip to avoid descending into them.
+		if (pi.name == SNAME("script")) {
+			continue;
+		}
+		Variant v = p_object->get(pi.name);
+		if (v.get_type() != Variant::OBJECT) {
+			continue;
+		}
+		Object *child = v.get_validated_object();
+		if (!child) {
+			continue;
+		}
+		// Nodes are covered by the explicit scene-tree walk; only follow
+		// Resources here (StyleBox, LabelSettings, Font, ...).
+		if (!Object::cast_to<Resource>(child)) {
+			continue;
+		}
+		_discover_object_links(child);
+	}
 }
 
 void DesignTokenInspectorPlugin::register_theme_links(const Theme *p_theme) {
@@ -1033,6 +1077,22 @@ void DesignTokenInspectorPlugin::_register_theme_links(const Theme *p_theme) {
 			Ref<StyleBox> style = p_theme->get_stylebox(style_name, type_name);
 			if (style.is_valid()) {
 				_discover_object_links(style.ptr());
+			}
+		}
+		List<StringName> font_list;
+		p_theme->get_font_list(type_name, &font_list);
+		for (const StringName &font_name : font_list) {
+			Ref<Font> font = p_theme->get_font(font_name, type_name);
+			if (font.is_valid()) {
+				_discover_object_links(font.ptr());
+			}
+		}
+		List<StringName> icon_list;
+		p_theme->get_icon_list(type_name, &icon_list);
+		for (const StringName &icon_name : icon_list) {
+			Ref<Texture2D> icon = p_theme->get_icon(icon_name, type_name);
+			if (icon.is_valid()) {
+				_discover_object_links(icon.ptr());
 			}
 		}
 	}

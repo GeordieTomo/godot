@@ -230,6 +230,10 @@ class DesignTokenInspectorPlugin : public EditorInspectorPlugin {
 	void _scan_edited_scenes_links();
 	void _discover_object_links(Object *p_object);
 	void _discover_node_links(Node *p_node);
+	// Recurses into Resource-typed properties (e.g. Control theme overrides
+	// like a Button's StyleBox, Label label_settings) so token links stored
+	// on those sub-resources are registered without opening each resource.
+	void _discover_resource_properties(Object *p_object);
 
 	// Registers every link currently saved on a Theme resource (item links live
 	// in a single Dictionary metadata entry) so its values follow the tokens.
