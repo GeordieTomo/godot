@@ -46,8 +46,35 @@
 #define BEVEL_OUTER_COLOR_B(p_corner_idx) (p_outer_colors[((p_corner_idx) * 2 + 2) % 8])
 
 namespace {
+// Per-side lighting exposure (-1..1) for LEFT, TOP, RIGHT, BOTTOM. Used to
+// interpolate bevel shading across rounded corners in exposure space rather
+// than RGB space, so opposite light/dark sides meet at the base color instead
+// of a gray mix (e.g. white-black lerp gives gray, while exposure 0 gives base).
 void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
-		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled = false);
+		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled = false,
+		const real_t *p_side_exposures = nullptr, bool p_inner_use_lighting = false, bool p_outer_use_lighting = false,
+		const Color *p_base_color = nullptr, const Color *p_light_blend = nullptr, const Color *p_dark_blend = nullptr, real_t p_mix_factor = 0.0);
+
+// Computes the opaque bevel border color for a lerped lighting exposure.
+// The opposite (inset) side uses the negated exposure, then mixes by p_mix
+// (0 = fully outset, 1 = fully inset), mirroring StyleBoxBevel::draw.
+inline Color bevel_border_color_from_exposure(real_t p_exposure, const Color &p_base, const Color &p_light_blend, const Color &p_dark_blend, real_t p_mix) {
+	Color outset = (p_exposure >= 0.0) ? p_base.lerp(p_light_blend, p_exposure) : p_base.lerp(p_dark_blend, -p_exposure);
+	real_t inset_exp = -p_exposure;
+	Color inset = (inset_exp >= 0.0) ? p_base.lerp(p_light_blend, inset_exp) : p_base.lerp(p_dark_blend, -inset_exp);
+	return outset.lerp(inset, CLAMP(p_mix, 0.0, 1.0));
+}
+
+// Corner to side mapping for exposure lerp: TL blends LEFT->TOP, TR TOP->RIGHT,
+// BR RIGHT->BOTTOM, BL BOTTOM->LEFT.
+inline void bevel_corner_sides(int p_corner_idx, int &r_side_a, int &r_side_b) {
+	switch (p_corner_idx) {
+		case 0: r_side_a = 0; r_side_b = 1; break; // TL: LEFT -> TOP.
+		case 1: r_side_a = 1; r_side_b = 2; break; // TR: TOP -> RIGHT.
+		case 2: r_side_a = 2; r_side_b = 3; break; // BR: RIGHT -> BOTTOM.
+		default: r_side_a = 3; r_side_b = 0; break; // BL: BOTTOM -> LEFT.
+	}
+}
 
 // Maps the normalized position across a blended border band (0 = outer edge, 1 =
 // inner edge) to the blend amount, based on the selected blend function. A tiny
@@ -204,8 +231,15 @@ void bevel_set_corner_scale(const Rect2 &style_rect, const Rect2 &inner_rect, co
 // TOP, RIGHT, BOTTOM) a pair of consecutive colors is used, so indices
 // 0-1=left, 2-3=top, 4-5=right, 6-7=bottom. Any corner blends between the two
 // colors adjacent to it.
+// When p_side_exposures is provided with p_inner/p_outer_use_lighting, the
+// corresponding side blends lighting exposures (not RGB) so opposite
+// light/dark sides meet at the base color instead of a gray mix. RGB comes
+// from p_base/p_light_blend/p_dark_blend with p_mix_factor; alpha still comes
+// from the input color arrays (opaque vs transparent fringe).
 void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color> &colors, const Rect2 &style_rect, const real_t corner_radius[4],
-		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled) {
+		const Rect2 &ring_rect, const Rect2 &inner_rect, const Color (&p_inner_colors)[8], const Color (&p_outer_colors)[8], const int corner_detail, const Vector2 &skew, bool is_filled,
+		const real_t *p_side_exposures, bool p_inner_use_lighting, bool p_outer_use_lighting,
+		const Color *p_base_color, const Color *p_light_blend, const Color *p_dark_blend, real_t p_mix_factor) {
 	int vert_offset = verts.size();
 	int adapted_corner_detail = (corner_radius[0] > 0) || (corner_radius[1] > 0) || (corner_radius[2] > 0) || (corner_radius[3] > 0) ? corner_detail : 1;
 
@@ -272,9 +306,20 @@ void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color>
 				const float x_skew = -skew.x * (y - style_rect_center.y);
 				const float y_skew = -skew.y * (x - style_rect_center.x);
 				verts_ptr[verts_size + idx_ofs] = Vector2(x + x_skew, y + y_skew);
-				const Color color_a = BEVEL_INNER_COLOR_A(corner_idx);
-				const Color color_b = BEVEL_INNER_COLOR_B(corner_idx);
-				colors_ptr[colors_size + idx_ofs] = color_a.lerp(color_b, blend);
+				if (p_inner_use_lighting && p_side_exposures && p_base_color && p_light_blend && p_dark_blend) {
+					int side_a, side_b;
+					bevel_corner_sides(corner_idx, side_a, side_b);
+					real_t exp = Math::lerp(p_side_exposures[side_a], p_side_exposures[side_b], blend);
+					Color rgb = bevel_border_color_from_exposure(exp, *p_base_color, *p_light_blend, *p_dark_blend, p_mix_factor);
+					const Color color_a = BEVEL_INNER_COLOR_A(corner_idx);
+					const Color color_b = BEVEL_INNER_COLOR_B(corner_idx);
+					float alpha = Math::lerp(color_a.a, color_b.a, (float)blend);
+					colors_ptr[colors_size + idx_ofs] = Color(rgb.r, rgb.g, rgb.b, alpha);
+				} else {
+					const Color color_a = BEVEL_INNER_COLOR_A(corner_idx);
+					const Color color_b = BEVEL_INNER_COLOR_B(corner_idx);
+					colors_ptr[colors_size + idx_ofs] = color_a.lerp(color_b, blend);
+				}
 			}
 
 			if (draw_border) {
@@ -283,9 +328,20 @@ void bevel_draw_ring(Vector<Vector2> &verts, Vector<int> &indices, Vector<Color>
 				const float x_skew = -skew.x * (y - style_rect_center.y);
 				const float y_skew = -skew.y * (x - style_rect_center.x);
 				verts_ptr[verts_size + idx_ofs + 1] = Vector2(x + x_skew, y + y_skew);
-				const Color color_a = BEVEL_OUTER_COLOR_A(corner_idx);
-				const Color color_b = BEVEL_OUTER_COLOR_B(corner_idx);
-				colors_ptr[colors_size + idx_ofs + 1] = color_a.lerp(color_b, blend);
+				if (p_outer_use_lighting && p_side_exposures && p_base_color && p_light_blend && p_dark_blend) {
+					int side_a, side_b;
+					bevel_corner_sides(corner_idx, side_a, side_b);
+					real_t exp = Math::lerp(p_side_exposures[side_a], p_side_exposures[side_b], blend);
+					Color rgb = bevel_border_color_from_exposure(exp, *p_base_color, *p_light_blend, *p_dark_blend, p_mix_factor);
+					const Color color_a = BEVEL_OUTER_COLOR_A(corner_idx);
+					const Color color_b = BEVEL_OUTER_COLOR_B(corner_idx);
+					float alpha = Math::lerp(color_a.a, color_b.a, (float)blend);
+					colors_ptr[colors_size + idx_ofs + 1] = Color(rgb.r, rgb.g, rgb.b, alpha);
+				} else {
+					const Color color_a = BEVEL_OUTER_COLOR_A(corner_idx);
+					const Color color_b = BEVEL_OUTER_COLOR_B(corner_idx);
+					colors_ptr[colors_size + idx_ofs + 1] = color_a.lerp(color_b, blend);
+				}
 			}
 		}
 	}
@@ -516,14 +572,19 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 	const Color &base_color = border_color_animated;
 
 	// Compute the color of each side, based on the lighting angle.
+	// Side exposures are kept separately so rounded corners can interpolate
+	// lighting in exposure space (via base color) instead of RGB space (which
+	// would mix opposite light/dark sides to gray instead of the base color).
 	Color light_blend = base_color.lerp(bevel_lighting_color_animated, bevel_lighting_intensity_animated);
 	Color dark_blend = base_color.lerp(bevel_darkening_color_animated, bevel_darkening_intensity_animated);
 	Color side_colors[4];
+	real_t side_exposures[4];
 	for (int i = 0; i < 4; i++) {
 		real_t ref_angle = Math::fposmod(((4 + 2 - i) % 4) * 90.0 - bevel_lighting_angle_animated, 360.0);
 		real_t linear_exposure = (ref_angle <= 180.0) ? (-(ref_angle / 90.0) + 1.0) : ((ref_angle / 90.0) - 3.0);
 		real_t ratio_to_remap = 1.0 - bevel_max_intensity_angle_ratio_animated;
 		real_t ref_exposure = (ratio_to_remap <= 0.0001) ? CLAMP(linear_exposure, (real_t)-1.0, (real_t)1.0) : CLAMP(Math::remap(linear_exposure, -ratio_to_remap, ratio_to_remap, (real_t)-1.0, (real_t)1.0), (real_t)-1.0, (real_t)1.0);
+		side_exposures[i] = ref_exposure;
 		side_colors[i] = (ref_exposure >= 0.0) ? base_color.lerp(light_blend, ref_exposure) : base_color.lerp(dark_blend, -ref_exposure);
 	}
 
@@ -684,7 +745,8 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 					border_style_rect, infill_rect, border_colors, border_blend_colors, bevel_blend_function, bevel_blend_curve, corner_detail, skew);
 		} else {
 			bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-					border_style_rect, infill_rect, border_inner_colors, border_colors, corner_detail, skew);
+					border_style_rect, infill_rect, border_inner_colors, border_colors, corner_detail, skew, false,
+					side_exposures, true, true, &base_color, &light_blend, &dark_blend, mix_factor);
 		}
 	}
 
@@ -784,18 +846,33 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 				bevel_draw_blend_bands(verts, border_indices, colors, border_style_rect, adapted_corner,
 						outer_rect_aa_colored, infill_rect, border_colors, border_blend_colors, bevel_blend_function, bevel_blend_curve, corner_detail, skew);
 			} else {
-				// Create border ring, not antialiased yet
+				// Create border ring, not antialiased yet. Interpolate lighting
+				// in exposure space so rounded corners meet at the base color.
 				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-						outer_rect_aa_colored, inner_rect_aa_colored, border_inner_colors, border_colors, corner_detail, skew);
+						outer_rect_aa_colored, inner_rect_aa_colored, border_inner_colors, border_colors, corner_detail, skew, false,
+						side_exposures, true, true, &base_color, &light_blend, &dark_blend, mix_factor);
 			}
 			if (!blend_on) {
-				// Add antialiasing on the ring inner border
+				// Add antialiasing on the ring inner border. The outer (border)
+				// edge uses lighting; the inner edge is uniform bg when the
+				// center is drawn, otherwise the transparent border fringe.
 				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-						inner_rect_aa_colored, inner_rect_aa_transparent, border_blend_colors, border_colors, corner_detail, skew);
+						inner_rect_aa_colored, inner_rect_aa_transparent, border_blend_colors, border_colors, corner_detail, skew, false,
+						side_exposures, !draw_center, true, &base_color, &light_blend, &dark_blend, mix_factor);
 			}
-			// Add antialiasing on the ring outer border
-			bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
-					outer_rect_aa_transparent, outer_rect_aa_colored, border_aa_outer_colors, border_aa_alpha_colors, corner_detail, skew);
+			// Add antialiasing on the ring outer border. For the non-blended
+			// case both edges share the same border hue variation, so use
+			// lighting for both (alpha still fades via the input colors).
+			// The blended case keeps the previous sampling (edge color already
+			// accounts for the blend curve at t=0).
+			if (!blend_on) {
+				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_transparent, outer_rect_aa_colored, border_aa_outer_colors, border_aa_alpha_colors, corner_detail, skew, false,
+						side_exposures, true, true, &base_color, &light_blend, &dark_blend, mix_factor);
+			} else {
+				bevel_draw_ring(verts, border_indices, colors, border_style_rect, adapted_corner,
+						outer_rect_aa_transparent, outer_rect_aa_colored, border_aa_outer_colors, border_aa_alpha_colors, corner_detail, skew);
+			}
 		}
 	}
 
@@ -818,8 +895,12 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 		if (any_fade) {
 			Color inset_shadow_color_modulated = inset_shadow_color;
 			Color inset_color_transparent = Color(inset_shadow_color_modulated.r, inset_shadow_color_modulated.g, inset_shadow_color_modulated.b, 0);
+			// Keep fade_outer at infill_rect (the border-center boundary, mid of
+			// the AA cross-fade when aa_on) so the shadow covers the bg-ish
+			// inner half of the fringe and leaves the border-ish outer half
+			// clean. Insetting by aa/2 would leave a light gap ring.
 			Rect2 fade_outer = infill_rect;
-			Rect2 fade_inner = infill_rect.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP], -fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
+			Rect2 fade_inner = fade_outer.grow_individual(-fade_depth[SIDE_LEFT], -fade_depth[SIDE_TOP], -fade_depth[SIDE_RIGHT], -fade_depth[SIDE_BOTTOM]);
 
 			Color inset_inner_colors[8];
 			Color inset_outer_colors[8];
@@ -829,15 +910,31 @@ void StyleBoxBevel::draw(RID p_canvas_item, const Rect2 &p_rect) const {
 			}
 
 			if (fade_inner.size.width > 0 && fade_inner.size.height > 0) {
-				bevel_draw_ring(verts, inset_indices, colors, style_rect, adapted_corner,
+				// Use border_style_rect (same reference as the border/center AA
+				// rings) so the same rect yields the same corner curvature.
+				// style_rect would derive a ~aa smaller radius for the same
+				// rect, leaving a seam at rounded corners.
+				bevel_draw_ring(verts, inset_indices, colors, border_style_rect, adapted_corner,
 						fade_outer, fade_inner, inset_inner_colors, inset_outer_colors, corner_detail, skew);
 			} else {
 				Color solid_colors[8];
 				for (int i = 0; i < 8; i++) {
 					solid_colors[i] = inset_shadow_color_modulated;
 				}
-				bevel_draw_ring(verts, inset_indices, colors, style_rect, adapted_corner,
+				bevel_draw_ring(verts, inset_indices, colors, border_style_rect, adapted_corner,
 						infill_rect, infill_rect, solid_colors, solid_colors, corner_detail, skew, true);
+			}
+
+			// Antialias the inset outer edge itself when AA is on. Without
+			// this the (translucent) shadow boundary stays hard while the
+			// underlying border/bg edge is smooth, reading as jagged at
+			// rounded corners. Feather outward only: transparent outside to
+			// opaque at the edge, sharing the edge so there's no overlap with
+			// the main inset ring.
+			if (aa_on) {
+				Rect2 inset_edge_aa_transparent = fade_outer.grow(aa_size_scaled * 0.5);
+				bevel_draw_ring(verts, inset_indices, colors, border_style_rect, adapted_corner,
+						inset_edge_aa_transparent, fade_outer, inset_outer_colors, inset_inner_colors, corner_detail, skew);
 			}
 		}
 	}
