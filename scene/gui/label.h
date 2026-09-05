@@ -98,6 +98,7 @@ private:
 		Point2 font_shadow_offset;
 		Color font_outline_color;
 		int font_outline_size;
+		Vector2 font_outline_offset;
 		int font_shadow_outline_size;
 	} theme_cache;
 

@@ -88,6 +88,7 @@ private:
 		int font_size = 0;
 		int outline_size = 0;
 		Color font_outline_color;
+		Vector2 font_outline_offset = Vector2(0, 0);
 
 		Color icon_normal_color;
 		Color icon_focus_color;

@@ -35,6 +35,7 @@
 #include "scene/gui/dialogs.h"
 #include "scene/theme/theme_db.h"
 #include "servers/display/accessibility_server.h"
+#include "servers/rendering/rendering_server.h"
 
 Size2 Button::get_minimum_size() const {
 	Ref<Texture2D> _icon = icon;
@@ -220,14 +221,19 @@ void Button::_notification(int p_what) {
 			const Size2 size = get_size();
 
 			Ref<StyleBox> style = _get_current_stylebox();
+			StringName anim_id = SNAME("button");
 			// Draws the stylebox in the current state.
+			StyleBox::begin_animation_group(anim_id);
 			if (!flat) {
 				style->draw(ci, Rect2(Point2(), size));
 			}
+			StyleBox::end_animation_group(anim_id);
 
+			StyleBox::begin_animation_group(SNAME("focus"));
 			if (has_focus(true)) {
 				theme_cache.focus->draw(ci, Rect2(Point2(), size));
 			}
+			StyleBox::end_animation_group(SNAME("focus"));
 
 			Ref<Texture2D> _icon = icon;
 			if (_icon.is_null() && has_theme_icon(SNAME("icon"))) {
@@ -336,6 +342,8 @@ void Button::_notification(int p_what) {
 
 				} break;
 			}
+			font_color = StyleBox::get_animated_value(SceneStringName(font_color), font_color, anim_id);
+			icon_modulate_color = StyleBox::get_animated_value(SNAME("icon_color"), icon_modulate_color, anim_id);
 
 			const bool is_clipped = clip_text || overrun_behavior != TextServer::OVERRUN_NO_TRIMMING || autowrap_mode != TextServer::AUTOWRAP_OFF;
 			const Size2 custom_element_size = drawable_size_remained;
@@ -465,10 +473,30 @@ void Button::_notification(int p_what) {
 
 				Color font_outline_color = theme_cache.font_outline_color;
 				int outline_size = theme_cache.outline_size;
-				if (outline_size > 0 && font_outline_color.a > 0.0f) {
-					text_buf->draw_outline(ci, text_ofs, outline_size, font_outline_color);
+				Vector2 outline_offset = theme_cache.font_outline_offset;
+				text_ofs = StyleBox::get_animated_value(SNAME("text_ofs"), text_ofs, anim_id);
+
+				real_t text_scale = StyleBox::get_animated_value(SNAME("text_scale"), style->get_text_scale(), anim_id);
+				bool text_scaled = !Math::is_equal_approx(text_scale, (real_t)1.0);
+				if (text_scaled) {
+					Vector2 anchor = size * 0.5;
+					Transform2D tf = Transform2D().translated(-anchor).scaled(Size2(text_scale, text_scale)).translated(anchor);
+					RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, tf);
+				}
+
+				if (font_outline_color.a > 0.0f) {
+					if (!outline_offset.is_zero_approx()) {
+						text_buf->draw(ci, text_ofs + outline_offset, font_outline_color);
+					}
+					if (outline_size > 0) {
+						text_buf->draw_outline(ci, text_ofs + outline_offset, outline_size, font_outline_color);
+					}
 				}
 				text_buf->draw(ci, text_ofs, font_color);
+
+				if (text_scaled) {
+					RenderingServer::get_singleton()->canvas_item_add_set_transform(ci, Transform2D());
+				}
 			}
 		} break;
 	}
@@ -858,6 +886,8 @@ void Button::_bind_methods() {
 	BIND_THEME_ITEM(Theme::DATA_TYPE_FONT_SIZE, Button, font_size);
 	BIND_THEME_ITEM(Theme::DATA_TYPE_CONSTANT, Button, outline_size);
 	BIND_THEME_ITEM(Theme::DATA_TYPE_COLOR, Button, font_outline_color);
+	BIND_THEME_ITEM_CUSTOM(Theme::DATA_TYPE_CONSTANT, Button, font_outline_offset.x, "outline_offset_x");
+	BIND_THEME_ITEM_CUSTOM(Theme::DATA_TYPE_CONSTANT, Button, font_outline_offset.y, "outline_offset_y");
 
 	BIND_THEME_ITEM(Theme::DATA_TYPE_COLOR, Button, icon_normal_color);
 	BIND_THEME_ITEM(Theme::DATA_TYPE_COLOR, Button, icon_focus_color);
