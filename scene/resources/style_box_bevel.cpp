@@ -69,10 +69,22 @@ inline Color bevel_border_color_from_exposure(real_t p_exposure, const Color &p_
 // BR RIGHT->BOTTOM, BL BOTTOM->LEFT.
 inline void bevel_corner_sides(int p_corner_idx, int &r_side_a, int &r_side_b) {
 	switch (p_corner_idx) {
-		case 0: r_side_a = 0; r_side_b = 1; break; // TL: LEFT -> TOP.
-		case 1: r_side_a = 1; r_side_b = 2; break; // TR: TOP -> RIGHT.
-		case 2: r_side_a = 2; r_side_b = 3; break; // BR: RIGHT -> BOTTOM.
-		default: r_side_a = 3; r_side_b = 0; break; // BL: BOTTOM -> LEFT.
+		case 0:
+			r_side_a = 0;
+			r_side_b = 1;
+			break; // TL: LEFT -> TOP.
+		case 1:
+			r_side_a = 1;
+			r_side_b = 2;
+			break; // TR: TOP -> RIGHT.
+		case 2:
+			r_side_a = 2;
+			r_side_b = 3;
+			break; // BR: RIGHT -> BOTTOM.
+		default:
+			r_side_a = 3;
+			r_side_b = 0;
+			break; // BL: BOTTOM -> LEFT.
 	}
 }
 
