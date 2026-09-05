@@ -279,6 +279,7 @@ void DesignTokenInspectorPlugin::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_library"), &DesignTokenInspectorPlugin::get_library);
 	ClassDB::bind_method(D_METHOD("link_property", "object", "property", "token_name"), &DesignTokenInspectorPlugin::link_property);
 	ClassDB::bind_method(D_METHOD("unlink_property", "object", "property"), &DesignTokenInspectorPlugin::unlink_property);
+	ClassDB::bind_method(D_METHOD("unlink_property_single", "object", "property"), &DesignTokenInspectorPlugin::unlink_property_single);
 	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "library", PROPERTY_HINT_RESOURCE_TYPE, "DesignTokenLibrary"), "set_library", "get_library");
 }
 
@@ -391,6 +392,37 @@ void DesignTokenInspectorPlugin::unlink_property(Object *p_object, const String 
 	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
 		// No value changes when unlinking, so force a refresh so theme editors
 		// re-enable their rows and update the chain button state.
+		theme->emit_changed();
+		notify_theme_links_changed(theme);
+	}
+
+	_refresh_inspector();
+}
+
+void DesignTokenInspectorPlugin::unlink_property_single(Object *p_object, const String &p_property) {
+	ERR_FAIL_NULL(p_object);
+
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
+		Dictionary links = _get_theme_links(theme);
+		if (!links.has(p_property)) {
+			// Still ensure in-memory tracking is cleared for consistency.
+			unregister_link(p_object, p_property);
+			return;
+		}
+		links.erase(p_property);
+		_set_theme_links(theme, links);
+	} else {
+		String meta_key = "__design_token_" + p_property;
+		if (!p_object->has_meta(meta_key)) {
+			// Still ensure in-memory tracking is cleared for consistency.
+			unregister_link(p_object, p_property);
+			return;
+		}
+		p_object->remove_meta(meta_key);
+	}
+	unregister_link(p_object, p_property);
+
+	if (Theme *theme = Object::cast_to<Theme>(p_object)) {
 		theme->emit_changed();
 		notify_theme_links_changed(theme);
 	}
@@ -662,7 +694,29 @@ void DesignTokenInspectorPlugin::_on_picker_item_activated(int p_index) {
 	ERR_FAIL_NULL(obj);
 
 	String token_name = token_item_list->get_item_metadata(p_index);
-	link_property(obj, pending_property, token_name);
+	String prop = pending_property;
+
+	String old_token = get_linked_token(obj, prop);
+	if (old_token == token_name) {
+		token_picker->hide();
+		pending_object_id = ObjectID();
+		pending_property = String();
+		picker_anchor = nullptr;
+		return;
+	}
+
+	Variant old_value = obj->get(prop);
+
+	EditorUndoRedoManager *ur = EditorUndoRedoManager::get_singleton();
+	ur->create_action(TTR("Link Design Token"));
+	ur->add_do_method(this, "link_property", obj, prop, token_name);
+	if (old_token.is_empty()) {
+		ur->add_undo_method(this, "unlink_property_single", obj, prop);
+	} else {
+		ur->add_undo_method(this, "link_property", obj, prop, old_token);
+	}
+	ur->add_undo_property(obj, prop, old_value);
+	ur->commit_action();
 
 	token_picker->hide();
 	pending_object_id = ObjectID();
@@ -690,15 +744,20 @@ void DesignTokenInspectorPlugin::_on_picker_create_token() {
 	}
 
 	int index = library->get_token_count();
-	Variant val = obj->get(pending_property);
+	String prop = pending_property;
+	Variant val = obj->get(prop);
+	String old_token = get_linked_token(obj, prop);
 	EditorUndoRedoManager *ur = EditorUndoRedoManager::get_singleton();
 	ur->create_action(TTR("Create Design Token and Link"));
 	ur->add_do_method(*library, "insert_token", index, name, (int)pending_type, val, false, String());
 	ur->add_undo_method(*library, "remove_token", index);
-	// Link is not undoable via UR; but we apply it as do and undo would be unlink (handled via separate remove?).
-	// We add it as do method via callable so redo reapplies.
-	ur->add_do_method(this, "link_property", obj, pending_property, name);
-	ur->add_undo_method(this, "unlink_property", obj, pending_property);
+	ur->add_do_method(this, "link_property", obj, prop, name);
+	if (old_token.is_empty()) {
+		ur->add_undo_method(this, "unlink_property_single", obj, prop);
+	} else if (old_token != name) {
+		ur->add_undo_method(this, "link_property", obj, prop, old_token);
+	}
+	ur->add_undo_property(obj, prop, val);
 	ur->commit_action();
 
 	token_picker->hide();
@@ -714,8 +773,57 @@ void DesignTokenInspectorPlugin::_on_picker_open_in_library() {
 
 void DesignTokenInspectorPlugin::_on_picker_unlink() {
 	Object *obj = ObjectDB::get_instance(pending_object_id);
-	if (obj) {
-		unlink_property(obj, pending_property);
+	String prop = pending_property;
+	if (obj && !prop.is_empty()) {
+		String token = get_linked_token(obj, prop);
+		if (token.is_empty()) {
+			// Nothing linked; nothing to record in undo history.
+		} else {
+			// Collect every link that unlink_property() will clear in bulk so
+			// undo can restore them all by re-linking to the same token.
+			Vector<Object *> undo_objs;
+			Vector<String> undo_props;
+			if (Object::cast_to<Theme>(obj)) {
+				Dictionary links = _get_theme_links(obj);
+				for (const Variant &k : links.keys()) {
+					if (String(links[k]) == token) {
+						undo_objs.push_back(obj);
+						undo_props.push_back(String(k));
+					}
+				}
+				// Fallback to at least the target when metadata is out of sync.
+				if (undo_objs.is_empty()) {
+					undo_objs.push_back(obj);
+					undo_props.push_back(prop);
+				}
+			} else if (Object::cast_to<StyleBox>(obj)) {
+				undo_objs.push_back(obj);
+				undo_props.push_back(prop);
+				for (const KeyValue<ObjectID, HashSet<StringName>> &E : linked_properties) {
+					Object *other = ObjectDB::get_instance(E.key);
+					if (!other || other == obj || !Object::cast_to<StyleBox>(other)) {
+						continue;
+					}
+					for (const StringName &p : E.value) {
+						if (get_linked_token(other, String(p)) == token) {
+							undo_objs.push_back(other);
+							undo_props.push_back(String(p));
+						}
+					}
+				}
+			} else {
+				undo_objs.push_back(obj);
+				undo_props.push_back(prop);
+			}
+
+			EditorUndoRedoManager *ur = EditorUndoRedoManager::get_singleton();
+			ur->create_action(TTR("Unlink Design Token"));
+			ur->add_do_method(this, "unlink_property", obj, prop);
+			for (int i = 0; i < undo_objs.size(); i++) {
+				ur->add_undo_method(this, "link_property", undo_objs[i], undo_props[i], token);
+			}
+			ur->commit_action();
+		}
 	}
 	token_picker->hide();
 	pending_object_id = ObjectID();

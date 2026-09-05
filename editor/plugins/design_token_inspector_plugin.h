@@ -252,6 +252,10 @@ public:
 	void open_picker(Object *p_object, const String &p_property, Variant::Type p_type, Control *p_anchor);
 	void link_property(Object *p_object, const String &p_property, const String &p_token_name);
 	void unlink_property(Object *p_object, const String &p_property);
+	// Single-link removal without the bulk follower clearing in unlink_property().
+	// Used for undo of a single link so pre-existing followers sharing the same
+	// token are left intact.
+	void unlink_property_single(Object *p_object, const String &p_property);
 
 	// Theme editors register a refresh callback (see theme_refresh_callbacks) so
 	// their rows update deterministically when a theme link changes.
