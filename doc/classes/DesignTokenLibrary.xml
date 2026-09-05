@@ -7,6 +7,13 @@
 	<tutorials>
 	</tutorials>
 	<methods>
+		<method name="find_token_by_name" qualifiers="const">
+			<return type="int" />
+			<param index="0" name="name" type="String" />
+			<description>
+				Returns the index of the token with the given name, or -1 if not found. Useful at runtime to resolve a token once and cache the index.
+			</description>
+		</method>
 		<method name="get_token_error" qualifiers="const">
 			<return type="String" />
 			<param index="0" name="index" type="int" />
@@ -128,6 +135,14 @@
 			<param index="0" name="index" type="int" />
 			<param index="1" name="value" type="Variant" />
 			<description>
+			</description>
+		</method>
+		<method name="set_token_value_by_name">
+			<return type="void" />
+			<param index="0" name="name" type="String" />
+			<param index="1" name="value" type="Variant" />
+			<description>
+				Sets a token value by name. Errors if the token does not exist or is a formula token. Emits changed so linked UI can refresh via apply helpers or the demo runtime applier.
 			</description>
 		</method>
 	</methods>

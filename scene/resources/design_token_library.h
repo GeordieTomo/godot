@@ -110,6 +110,8 @@ public:
 
 	Variant get_token_value_by_name(const String &p_name) const;
 	bool has_token(const String &p_name) const;
+	int find_token_by_name(const String &p_name) const;
+	void set_token_value_by_name(const String &p_name, const Variant &p_value);
 	Vector<String> get_token_names() const;
 	Vector<String> get_token_names_for_type(Variant::Type p_type) const;
 

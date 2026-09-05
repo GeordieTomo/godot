@@ -74,6 +74,19 @@ TEST_CASE("[DesignTokenLibrary] Formula evaluation") {
 	CHECK(int(v) == 25);
 }
 
+TEST_CASE("[DesignTokenLibrary] Find and set by name (runtime)") {
+	Ref<DesignTokenLibrary> lib = memnew(DesignTokenLibrary);
+	lib->insert_token(0, "base_colour", Variant::COLOR, Color(1, 0, 0));
+	lib->insert_token(1, "padding", Variant::FLOAT, 8.0);
+	CHECK(lib->find_token_by_name("base_colour") == 0);
+	CHECK(lib->find_token_by_name("padding") == 1);
+	CHECK(lib->find_token_by_name("missing") == -1);
+	lib->set_token_value_by_name("padding", 16.0);
+	CHECK(double(lib->get_token_value_by_name("padding")) == doctest::Approx(16.0));
+	lib->set_token_value_by_name("base_colour", Color(0, 1, 0));
+	CHECK(lib->get_token_value_by_name("base_colour").operator Color() == Color(0, 1, 0));
+}
+
 TEST_CASE("[DesignTokenLibrary] Drag only final undo kept") {
 	Ref<DesignTokenLibrary> lib = memnew(DesignTokenLibrary);
 	lib->insert_token(0, "size", Variant::INT, 10);

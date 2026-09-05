@@ -153,6 +153,8 @@ void DesignTokenLibrary::_bind_methods() {
 
 	ClassDB::bind_method(D_METHOD("get_token_value_by_name", "name"), &DesignTokenLibrary::get_token_value_by_name);
 	ClassDB::bind_method(D_METHOD("has_token", "name"), &DesignTokenLibrary::has_token);
+	ClassDB::bind_method(D_METHOD("find_token_by_name", "name"), &DesignTokenLibrary::find_token_by_name);
+	ClassDB::bind_method(D_METHOD("set_token_value_by_name", "name", "value"), &DesignTokenLibrary::set_token_value_by_name);
 	ClassDB::bind_method(D_METHOD("get_token_names"), &DesignTokenLibrary::get_token_names);
 	ClassDB::bind_method(D_METHOD("get_token_names_for_type", "type"), &DesignTokenLibrary::get_token_names_for_type);
 	ClassDB::bind_method(D_METHOD("is_valid_token_name", "name"), &DesignTokenLibrary::is_valid_token_name);
@@ -918,6 +920,29 @@ bool DesignTokenLibrary::has_token(const String &p_name) const {
 		}
 	}
 	return false;
+}
+
+int DesignTokenLibrary::find_token_by_name(const String &p_name) const {
+	const StringName key = StringName(p_name);
+	auto it = name_to_index.find(key);
+	if (it) {
+		int idx = it->value;
+		if (idx >= 0 && idx < tokens.size() && tokens[idx].name == p_name) {
+			return idx;
+		}
+	}
+	for (int i = 0; i < tokens.size(); i++) {
+		if (tokens[i].name == p_name) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+void DesignTokenLibrary::set_token_value_by_name(const String &p_name, const Variant &p_value) {
+	int idx = find_token_by_name(p_name);
+	ERR_FAIL_COND_MSG(idx < 0, vformat("DesignTokenLibrary: no token named '%s'.", p_name));
+	set_token_value(idx, p_value);
 }
 
 Vector<String> DesignTokenLibrary::get_token_names() const {
