@@ -129,6 +129,7 @@
 #include "scene/resources/compressed_texture.h"
 #include "scene/resources/compressed_texture_resource_format.h"
 #include "scene/resources/curve_texture.h"
+#include "scene/resources/design_token_library.h"
 #include "scene/resources/drawable_texture_2d.h"
 #include "scene/resources/environment.h"
 #include "scene/resources/external_texture.h"
@@ -159,7 +160,9 @@
 #include "scene/resources/sky.h"
 #include "scene/resources/streamed_texture.h"
 #include "scene/resources/style_box.h"
+#include "scene/resources/style_box_bevel.h"
 #include "scene/resources/style_box_flat.h"
+#include "scene/resources/style_box_gradient.h"
 #include "scene/resources/style_box_line.h"
 #include "scene/resources/style_box_texture.h"
 #include "scene/resources/surface_tool.h"
@@ -1016,6 +1019,7 @@ void register_scene_types() {
 	GDREGISTER_CLASS(Curve);
 
 	GDREGISTER_CLASS(LabelSettings);
+	GDREGISTER_CLASS(DesignTokenLibrary);
 
 	GDREGISTER_CLASS(TextLine);
 	GDREGISTER_CLASS(TextParagraph);
@@ -1024,6 +1028,8 @@ void register_scene_types() {
 	GDREGISTER_CLASS(StyleBoxEmpty);
 	GDREGISTER_CLASS(StyleBoxTexture);
 	GDREGISTER_CLASS(StyleBoxFlat);
+	GDREGISTER_CLASS(StyleBoxGradient);
+	GDREGISTER_CLASS(StyleBoxBevel);
 	GDREGISTER_CLASS(StyleBoxLine);
 	GDREGISTER_CLASS(Theme);
 

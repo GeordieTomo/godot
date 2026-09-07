@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="StyleBoxBevel" inherits="StyleBoxFlat" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+	</brief_description>
+	<description>
+	</description>
+	<tutorials>
+	</tutorials>
+	<members>
+		<member name="bevel_blend_curve" type="Curve" setter="set_bevel_blend_curve" getter="get_bevel_blend_curve">
+		</member>
+		<member name="bevel_blend_function" type="int" setter="set_bevel_blend_function" getter="get_bevel_blend_function" enum="StyleBoxBevel.BevelBlendFunction" default="0">
+		</member>
+		<member name="bevel_darkening_color" type="Color" setter="set_bevel_darkening_color" getter="get_bevel_darkening_color" default="Color(0, 0, 0, 1)">
+		</member>
+		<member name="bevel_darkening_intensity" type="float" setter="set_bevel_darkening_intensity" getter="get_bevel_darkening_intensity" default="0.3">
+		</member>
+		<member name="bevel_lighting_angle" type="float" setter="set_bevel_lighting_angle" getter="get_bevel_lighting_angle" default="135.0">
+		</member>
+		<member name="bevel_lighting_color" type="Color" setter="set_bevel_lighting_color" getter="get_bevel_lighting_color" default="Color(1, 1, 1, 1)">
+		</member>
+		<member name="bevel_lighting_intensity" type="float" setter="set_bevel_lighting_intensity" getter="get_bevel_lighting_intensity" default="0.3">
+		</member>
+		<member name="bevel_max_intensity_angle_ratio" type="float" setter="set_bevel_max_intensity_angle_ratio" getter="get_bevel_max_intensity_angle_ratio" default="0.5">
+		</member>
+		<member name="bevel_style" type="float" setter="set_bevel_style" getter="get_bevel_style" default="1.0">
+		</member>
+		<member name="inset_shadow_color" type="Color" setter="set_inset_shadow_color" getter="get_inset_shadow_color" default="Color(0, 0, 0, 0.6)">
+			The color of the inset shadow. This has no effect if [member inset_shadow_size] is lower than 1.
+		</member>
+		<member name="inset_shadow_offset" type="Vector2" setter="set_inset_shadow_offset" getter="get_inset_shadow_offset" default="Vector2(0, 0)">
+			The inset shadow offset in pixels. Extends the shadow's fade deeper into the background on the sides the offset points toward, and shortens it on the opposite sides. The shadow's outer edge always remains aligned with the background shape.
+		</member>
+		<member name="inset_shadow_size" type="int" setter="set_inset_shadow_size" getter="get_inset_shadow_size" default="0">
+			The size of the inset shadow in pixels. The shadow fades from [member inset_shadow_color] at the background's edge to fully transparent at this distance, extended by [member inset_shadow_offset] on each side. Larger values make the shadow cover more of the background area.
+		</member>
+	</members>
+	<constants>
+		<constant name="BEVEL_BLEND_LINEAR" value="0" enum="BevelBlendFunction">
+		</constant>
+		<constant name="BEVEL_BLEND_SMOOTHSTEP" value="1" enum="BevelBlendFunction">
+		</constant>
+		<constant name="BEVEL_BLEND_EASE_IN" value="2" enum="BevelBlendFunction">
+		</constant>
+		<constant name="BEVEL_BLEND_EASE_OUT" value="3" enum="BevelBlendFunction">
+		</constant>
+		<constant name="BEVEL_BLEND_EASE_IN_OUT" value="4" enum="BevelBlendFunction">
+		</constant>
+		<constant name="BEVEL_BLEND_CURVE" value="5" enum="BevelBlendFunction">
+		</constant>
+	</constants>
+</class>

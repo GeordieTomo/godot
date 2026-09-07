@@ -407,6 +407,12 @@ class ThemeTypeEditor : public MarginContainer {
 	void _color_item_changed(Color p_value, String p_item_name);
 	void _constant_item_changed(float p_value, String p_item_name);
 	void _font_size_item_changed(float p_value, String p_item_name);
+
+	// Design token links for theme item values.
+	String _get_theme_item_property(Theme::DataType p_data_type, const String &p_item_name) const;
+	void _item_token_chain_pressed(int p_data_type, const String &p_item_name, Button *p_anchor);
+	void _update_item_token_state(Control *p_row, Theme::DataType p_data_type, const String &p_item_name, Control *p_editor);
+	void _refresh_token_link_states();
 	void _edit_resource_item(Ref<Resource> p_resource, bool p_edit);
 	void _font_item_changed(Ref<Font> p_value, String p_item_name);
 	void _icon_item_changed(Ref<Texture2D> p_value, String p_item_name);
@@ -433,6 +439,7 @@ public:
 	bool is_stylebox_pinned(Ref<StyleBox> p_stylebox);
 
 	ThemeTypeEditor();
+	~ThemeTypeEditor();
 };
 
 class ThemeEditor : public EditorDock {

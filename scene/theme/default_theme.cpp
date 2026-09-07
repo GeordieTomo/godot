@@ -152,6 +152,8 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	theme->set_font(SceneStringName(font), "Button", Ref<Font>());
 	theme->set_font_size(SceneStringName(font_size), "Button", -1);
 	theme->set_constant("outline_size", "Button", 0);
+	theme->set_constant("outline_offset_x", "Button", 0);
+	theme->set_constant("outline_offset_y", "Button", 0);
 
 	theme->set_color(SceneStringName(font_color), "Button", control_font_color);
 	theme->set_color("font_pressed_color", "Button", control_font_pressed_color);
@@ -388,6 +390,8 @@ void fill_default_theme(Ref<Theme> &theme, const Ref<Font> &default_font, const 
 	theme->set_constant("shadow_offset_x", "Label", Math::round(1 * scale));
 	theme->set_constant("shadow_offset_y", "Label", Math::round(1 * scale));
 	theme->set_constant("outline_size", "Label", 0);
+	theme->set_constant("outline_offset_x", "Label", 0);
+	theme->set_constant("outline_offset_y", "Label", 0);
 	theme->set_constant("shadow_outline_size", "Label", Math::round(1 * scale));
 	theme->set_constant("line_spacing", "Label", Math::round(3 * scale));
 

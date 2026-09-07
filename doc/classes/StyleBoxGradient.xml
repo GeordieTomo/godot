@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<class name="StyleBoxGradient" inherits="StyleBoxFlat" api_type="core" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="../class.xsd">
+	<brief_description>
+	</brief_description>
+	<description>
+	</description>
+	<tutorials>
+	</tutorials>
+	<methods>
+		<method name="get_side_border_texture" qualifiers="const">
+			<return type="Texture2D" />
+			<param index="0" name="margin" type="int" enum="Side" />
+			<description>
+			</description>
+		</method>
+		<method name="set_side_border_texture">
+			<return type="void" />
+			<param index="0" name="margin" type="int" enum="Side" />
+			<param index="1" name="border_texture" type="Texture2D" />
+			<description>
+			</description>
+		</method>
+	</methods>
+	<members>
+		<member name="border_texture_bottom" type="Texture2D" setter="set_side_border_texture" getter="get_side_border_texture">
+		</member>
+		<member name="border_texture_left" type="Texture2D" setter="set_side_border_texture" getter="get_side_border_texture">
+		</member>
+		<member name="border_texture_right" type="Texture2D" setter="set_side_border_texture" getter="get_side_border_texture">
+		</member>
+		<member name="border_texture_top" type="Texture2D" setter="set_side_border_texture" getter="get_side_border_texture">
+		</member>
+		<member name="inset_shadow_color" type="Color" setter="set_inset_shadow_color" getter="get_inset_shadow_color" default="Color(0, 0, 0, 0.6)">
+		</member>
+		<member name="inset_shadow_offset" type="Vector2" setter="set_inset_shadow_offset" getter="get_inset_shadow_offset" default="Vector2(0, 0)">
+		</member>
+		<member name="inset_shadow_size" type="int" setter="set_inset_shadow_size" getter="get_inset_shadow_size" default="0">
+		</member>
+		<member name="modulate" type="Color" setter="set_modulate" getter="get_modulate" default="Color(1, 1, 1, 1)">
+		</member>
+	</members>
+</class>

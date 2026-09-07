@@ -145,6 +145,8 @@
 		<member name="outline_color" type="Color" setter="set_outline_color" getter="get_outline_color" default="Color(1, 1, 1, 1)">
 			The color of the outline.
 		</member>
+		<member name="outline_offset" type="Vector2" setter="set_outline_offset" getter="get_outline_offset" default="Vector2(0, 0)">
+		</member>
 		<member name="outline_size" type="int" setter="set_outline_size" getter="get_outline_size" default="0">
 			Text outline size.
 		</member>
